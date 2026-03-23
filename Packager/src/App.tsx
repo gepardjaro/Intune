@@ -337,6 +337,25 @@ export default function App() {
         developer: vendor
       }
     }));
+
+    // Re-fetch template with actual app details so placeholders are replaced
+    const params = new URLSearchParams({
+      appId: app.id,
+      appName: app.name,
+      publisher: vendor,
+      version: app.version,
+    });
+    fetch(`/api/psadt/template?${params}`)
+      .then(res => res.json())
+      .then(data => {
+        setBaseTemplate(data.content);
+        setState(prev => ({
+          ...prev,
+          psadt: { ...prev.psadt, scriptContent: data.content }
+        }));
+      })
+      .catch(err => console.error("Failed to refresh template:", err));
+
     nextStep();
   };
 
