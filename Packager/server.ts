@@ -144,8 +144,8 @@ async function importToIntune(params: {
   }
 
   const escapePS = (str: string | undefined) => (str || '').replace(/'/g, "''");
-  const safeInstallCmd = escapePS(installCommand || 'powershell.exe -ExecutionPolicy Bypass -File Install-App.ps1');
-  const safeUninstallCmd = escapePS(uninstallCommand || 'powershell.exe -ExecutionPolicy Bypass -File Uninstall-App.ps1');
+  const safeInstallCmd = escapePS(installCommand || 'powershell.exe -ExecutionPolicy Bypass -File Invoke-AppDeployToolkit.ps1');
+  const safeUninstallCmd = escapePS(uninstallCommand || 'powershell.exe -ExecutionPolicy Bypass -File Invoke-AppDeployToolkit.ps1 -DeploymentType Uninstall');
 
   const psScript = `
     $ErrorActionPreference = 'Stop'
@@ -822,103 +822,119 @@ async function startServer() {
     try {
       console.log(`Starting Intune import for ${appName} v${version}...`);
 
-      // 1. Generate Install/Uninstall scripts with dynamic AppId before wrapping
-      const sourceFolder = path.join(process.cwd(), "src_packager", "PSADT");
-      if (!fs.existsSync(sourceFolder)) fs.mkdirSync(sourceFolder, { recursive: true });
+      // 1. Inject dynamic install/uninstall WinGet commands into PSADT template
+      const templatePath = path.join(process.cwd(), "src_packager", "PSADT", "Invoke-AppDeployToolkit.ps1");
+      if (!fs.existsSync(templatePath)) {
+        throw new Error("PSADT template not found. Please run Setup PSADT first.");
+      }
 
       const escapeAppId = (appId || '').replace(/'/g, "''");
+      const originalTemplate = fs.readFileSync(templatePath, "utf-8");
 
+      const installInjection = `    ## <Perform Installation tasks here>
+    # ---------------------------------------------------------
+    # DEFINE THE ACTUAL PAYLOAD (Independent of PS Version)
+    # ---------------------------------------------------------
+    $scriptPayload = {
+        $moduleName = "Microsoft.WinGet.Client"
+        Import-Module $moduleName -ErrorAction Stop
+        $AppId = '${escapeAppId}'
+        try {
+            Install-WinGetPackage -Id $AppId -ErrorAction Stop
+            Write-Host "Successfully installed $AppId." -ForegroundColor Green
+        }
+        catch {
+            Write-Host "Failed to install $AppId. Error: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+    # ---------------------------------------------------------
+    # PS7 CHECK AND EXECUTION ROUTING
+    # ---------------------------------------------------------
+    if ($PSVersionTable.PSVersion.Major -lt 7) {
+        $pwshPath = "C:\\Program Files\\PowerShell\\7\\pwsh.exe"
+        # Launch pwsh and pass the commands directly
+        Write-Host "Running in PS5.1. Launching commands in PowerShell 7..."
+        & $pwshPath -NoProfile -ExecutionPolicy Bypass -Command $scriptPayload
+        if ( $LASTEXITCODE -eq 1 ) {
+            Write-Output "Installation failed"
+            exit 1
+        }
+        else {
+            Write-Output "Installation successful"
+        }
+    }
+    else {
+        # We are already running in PS7 natively, so just run the payload!
+        Write-Host "Already running in PowerShell 7. Executing payload..."
+        & $scriptPayload
+    }`;
+
+      const uninstallInjection = `    ## <Perform Uninstallation tasks here>
+    # ---------------------------------------------------------
+    # DEFINE THE ACTUAL PAYLOAD (Independent of PS Version)
+    # ---------------------------------------------------------
+    $scriptPayload = {
+        $moduleName = "Microsoft.WinGet.Client"
+        Import-Module $moduleName -ErrorAction Stop
+        $AppId = '${escapeAppId}'
+        try {
+            Uninstall-WinGetPackage -Id $AppId -ErrorAction Stop
+            Write-Host "Successfully uninstalled $AppId." -ForegroundColor Green
+        }
+        catch {
+            Write-Host "Failed to uninstall $AppId. Error: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+    # ---------------------------------------------------------
+    # PS7 CHECK AND EXECUTION ROUTING
+    # ---------------------------------------------------------
+    if ($PSVersionTable.PSVersion.Major -lt 7) {
+        $pwshPath = "C:\\Program Files\\PowerShell\\7\\pwsh.exe"
+        # Launch pwsh and pass the commands directly
+        Write-Host "Running in PS5.1. Launching commands in PowerShell 7..."
+        & $pwshPath -NoProfile -ExecutionPolicy Bypass -Command $scriptPayload
+        if ( $LASTEXITCODE -eq 1 ) {
+            Write-Output "Uninstallation failed"
+            exit 1
+        }
+        else {
+            Write-Output "Uninstallation successful"
+        }
+    }
+    else {
+        # We are already running in PS7 natively, so just run the payload!
+        Write-Host "Already running in PowerShell 7. Executing payload..."
+        & $scriptPayload
+    }`;
+
+      let modifiedTemplate = originalTemplate;
       if (!installCommand) {
-        const installScript = `# ---------------------------------------------------------
-# DEFINE THE ACTUAL PAYLOAD (Independent of PS Version)
-# ---------------------------------------------------------
-$scriptPayload = {
-    $moduleName = "Microsoft.WinGet.Client"
-    Import-Module $moduleName -ErrorAction Stop
-    $AppId = '${escapeAppId}'
-    try {
-        Install-WinGetPackage -Id $AppId -ErrorAction Stop
-        Write-Host "Successfully installed $AppId." -ForegroundColor Green
-    }
-    catch {
-        Write-Host "Failed to install $AppId. Error: $($_.Exception.Message)" -ForegroundColor Yellow
-    }
-}
-# ---------------------------------------------------------
-# PS7 CHECK AND EXECUTION ROUTING
-# ---------------------------------------------------------
-if ($PSVersionTable.PSVersion.Major -lt 7) {
-
-    $pwshPath = "C:\\Program Files\\PowerShell\\7\\pwsh.exe"
-    # Launch pwsh and pass the commands directly
-    Write-Host "Running in PS5.1. Launching commands in PowerShell 7..."
-    & $pwshPath -NoProfile -ExecutionPolicy Bypass -Command $scriptPayload
-
-    if ( $LASTEXITCODE -eq 1 ) {
-        Write-Output "Installation failed"
-        exit 1
-    }
-    else {
-        Write-Output "Installation successful"
-    }
-}
-else {
-    # We are already running in PS7 natively, so just run the payload!
-    Write-Host "Already running in PowerShell 7. Executing payload..."
-    & $scriptPayload
-}
-`;
-        fs.writeFileSync(path.join(sourceFolder, "Install-App.ps1"), installScript, "utf-8");
-        console.log("Generated Install-App.ps1 with dynamic AppId.");
+        modifiedTemplate = modifiedTemplate.replace(
+          "    ## <Perform Installation tasks here>",
+          installInjection
+        );
+        console.log("Injected install WinGet script into PSADT template.");
       }
-
       if (!uninstallCommand) {
-        const uninstallScript = `# ---------------------------------------------------------
-# DEFINE THE ACTUAL PAYLOAD (Independent of PS Version)
-# ---------------------------------------------------------
-$scriptPayload = {
-    $moduleName = "Microsoft.WinGet.Client"
-    Import-Module $moduleName -ErrorAction Stop
-    $AppId = '${escapeAppId}'
-    try {
-        Uninstall-WinGetPackage -Id $AppId -ErrorAction Stop
-        Write-Host "Successfully uninstalled $AppId." -ForegroundColor Green
-    }
-    catch {
-        Write-Host "Failed to uninstall $AppId. Error: $($_.Exception.Message)" -ForegroundColor Yellow
-    }
-}
-# ---------------------------------------------------------
-# PS7 CHECK AND EXECUTION ROUTING
-# ---------------------------------------------------------
-if ($PSVersionTable.PSVersion.Major -lt 7) {
-
-    $pwshPath = "C:\\Program Files\\PowerShell\\7\\pwsh.exe"
-    # Launch pwsh and pass the commands directly
-    Write-Host "Running in PS5.1. Launching commands in PowerShell 7..."
-    & $pwshPath -NoProfile -ExecutionPolicy Bypass -Command $scriptPayload
-
-    if ( $LASTEXITCODE -eq 1 ) {
-        Write-Output "Installation failed"
-        exit 1
-    }
-    else {
-        Write-Output "Installation successful"
-    }
-}
-else {
-    # We are already running in PS7 natively, so just run the payload!
-    Write-Host "Already running in PowerShell 7. Executing payload..."
-    & $scriptPayload
-}
-`;
-        fs.writeFileSync(path.join(sourceFolder, "Uninstall-App.ps1"), uninstallScript, "utf-8");
-        console.log("Generated Uninstall-App.ps1 with dynamic AppId.");
+        modifiedTemplate = modifiedTemplate.replace(
+          "    ## <Perform Uninstallation tasks here>",
+          uninstallInjection
+        );
+        console.log("Injected uninstall WinGet script into PSADT template.");
       }
 
-      // 2. Run actual wrapping (scripts are now in the source folder)
-      const wrapResult = await wrapApp(appName, version);
-      console.log("Wrapping successful for import process.");
+      fs.writeFileSync(templatePath, modifiedTemplate, "utf-8");
+
+      // 2. Run actual wrapping, then restore original template
+      let wrapResult;
+      try {
+        wrapResult = await wrapApp(appName, version);
+        console.log("Wrapping successful for import process.");
+      } finally {
+        // Always restore the original template, even on failure
+        fs.writeFileSync(templatePath, originalTemplate, "utf-8");
+        console.log("Restored original PSADT template after wrapping.");
+      }
 
       // 2. Resolve icon path if it's a local icon
       let localIconPath: string | undefined;
