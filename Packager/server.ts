@@ -931,7 +931,9 @@ async function startServer() {
       }
 
       const escapePs = (val: string) => (val || '').replace(/'/g, "''");
-      const originalTemplate = fs.readFileSync(templatePath, "utf-8");
+      const rawTemplate = fs.readFileSync(templatePath, "utf-8");
+      // Ensure scripts are injected (safety net for manually replaced templates)
+      const originalTemplate = injectPsadtScripts(rawTemplate);
       const modifiedTemplate = originalTemplate
         .replace(/__APPID__/g, escapePs(appId))
         .replace(/__APPNAME__/g, escapePs(appName))
@@ -1029,8 +1031,14 @@ async function startServer() {
     const templatePath = path.join(process.cwd(), "src_packager", "PSADT", "Invoke-AppDeployToolkit.ps1");
     try {
       if (fs.existsSync(templatePath)) {
-        const content = await readFileAsync(templatePath, "utf-8");
-        res.json({ content });
+        const rawContent = await readFileAsync(templatePath, "utf-8");
+        const injectedContent = injectPsadtScripts(rawContent);
+        // Persist injection if template was freshly replaced on disk
+        if (injectedContent !== rawContent) {
+          fs.writeFileSync(templatePath, injectedContent, "utf-8");
+          console.log("Auto-injected scripts into manually replaced PSADT template.");
+        }
+        res.json({ content: injectedContent });
       } else {
         res.status(404).json({ error: "Template not found" });
       }
