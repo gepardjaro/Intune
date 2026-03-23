@@ -1032,9 +1032,21 @@ async function startServer() {
     try {
       if (fs.existsSync(templatePath)) {
         const rawContent = await readFileAsync(templatePath, "utf-8");
-        // Inject scripts for display only — don't write to disk (triggers Vite reload loop)
-        // The wrap-time safety net handles persisting the injection when it matters
-        const injectedContent = injectPsadtScripts(rawContent);
+        let injectedContent = injectPsadtScripts(rawContent);
+
+        // Replace placeholders with actual app data if provided via query params
+        const { appId, appName, publisher, version, developer, owner } = req.query;
+        if (appId || appName || publisher || version) {
+          const escapePs = (val: string) => (val || '').replace(/'/g, "''");
+          injectedContent = injectedContent
+            .replace(/__APPID__/g, escapePs(String(appId || '')))
+            .replace(/__APPNAME__/g, escapePs(String(appName || '')))
+            .replace(/__APPVENDOR__/g, escapePs(String(publisher || '')))
+            .replace(/__APPVERSION__/g, escapePs(String(version || '')))
+            .replace(/__APPSCRIPTDATE__/g, new Date().toISOString().split('T')[0])
+            .replace(/__APPSCRIPTAUTHOR__/g, escapePs(String(developer || owner || 'Automacanie')));
+        }
+
         res.json({ content: injectedContent });
       } else {
         res.status(404).json({ error: "Template not found" });
