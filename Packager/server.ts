@@ -1032,12 +1032,9 @@ async function startServer() {
     try {
       if (fs.existsSync(templatePath)) {
         const rawContent = await readFileAsync(templatePath, "utf-8");
+        // Inject scripts for display only — don't write to disk (triggers Vite reload loop)
+        // The wrap-time safety net handles persisting the injection when it matters
         const injectedContent = injectPsadtScripts(rawContent);
-        // Persist injection if template was freshly replaced on disk
-        if (injectedContent !== rawContent) {
-          fs.writeFileSync(templatePath, injectedContent, "utf-8");
-          console.log("Auto-injected scripts into manually replaced PSADT template.");
-        }
         res.json({ content: injectedContent });
       } else {
         res.status(404).json({ error: "Template not found" });
