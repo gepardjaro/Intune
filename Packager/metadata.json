@@ -1,0 +1,8 @@
+{
+  "name": "Intune App Packager Pro",
+  "description": "Professional Intune application packaging and deployment automation tool using PSADT, Winget, and AI assistance.",
+  "requestFramePermissions": [
+    "clipboard-read",
+    "clipboard-write"
+  ]
+}
