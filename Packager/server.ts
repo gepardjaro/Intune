@@ -380,7 +380,7 @@ else {
           if ('${escapePS(category)}' -ne '' -and '${escapePS(category)}' -ne 'undefined') {
               $catName = '${escapePS(category)}'
               Write-Host "Processing category: $catName"
-              $catUri = "deviceAppManagement/mobileAppCategories?`$filter=displayName eq '$([uri]::EscapeDataString($catName))'"
+              $catUri = "deviceAppManagement/mobileAppCategories?\`$filter=displayName eq '$([uri]::EscapeDataString($catName))'"
               $catRes = Invoke-RestMethod -Uri "https://graph.microsoft.com/beta/$catUri" -Method GET -Headers @{Authorization = $authToken}
               
               $catId = $null
@@ -405,7 +405,7 @@ else {
                       "@odata.id" = "https://graph.microsoft.com/beta/deviceAppManagement/mobileAppCategories/$catId"
                   } | ConvertTo-Json -Depth 10
                   try {
-                      Invoke-RestMethod -Uri "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$AppId/categories/`$ref" -Method POST -Headers @{Authorization = $authToken; "Content-Type" = "application/json"} -Body $catAssignPayload | Out-Null
+                      Invoke-RestMethod -Uri "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$AppId/categories/\`$ref" -Method POST -Headers @{Authorization = $authToken; "Content-Type" = "application/json"} -Body $catAssignPayload | Out-Null
                       Write-Host "Successfully assigned category '$catName' to the app."
                   } catch {
                       Write-Host "Failed to assign category: $_"
