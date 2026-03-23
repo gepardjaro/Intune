@@ -581,36 +581,20 @@ async function startServer() {
     }
   });
 
-  // Function to setup PSADT automatically
-  let psadtSetupPromise: Promise<void> | null = null;
-  async function setupPsadt() {
-    if (psadtSetupPromise) return psadtSetupPromise;
-    
-    psadtSetupPromise = (async () => {
-      const psadtUrl = "https://github.com/PSAppDeployToolkit/PSAppDeployToolkit/releases/download/4.1.8/PSAppDeployToolkit_Template_v4.zip";
-      const targetDir = path.join(process.cwd(), "src_packager", "PSADT");
-      const zipPath = path.join(process.cwd(), "PSAppDeployToolkit_Template_v4.zip");
-      const markerFile = path.join(targetDir, "Invoke-AppDeployToolkit.ps1");
-      const psadtModuleDir = path.join(targetDir, "PSAppDeployToolkit");
+  // Reusable function to inject scripts and placeholders into a PSADT template
+  function injectPsadtScripts(content: string): string {
+    let result = content;
 
-      if (fs.existsSync(markerFile) && fs.existsSync(psadtModuleDir)) {
-        console.log("PSADT already setup, skipping automatic download.");
-        return;
-      }
+    // Inject app detail placeholders into $adtSession block (only if still at defaults)
+    result = result.replace("AppVendor = ''", "AppVendor = '__APPVENDOR__'");
+    result = result.replace("AppName = ''", "AppName = '__APPNAME__'");
+    result = result.replace("AppVersion = ''", "AppVersion = '__APPVERSION__'");
+    result = result.replace(/AppScriptDate = '[^']*'/, "AppScriptDate = '__APPSCRIPTDATE__'");
+    result = result.replace("AppScriptAuthor = '<author name>'", "AppScriptAuthor = '__APPSCRIPTAUTHOR__'");
 
-      try {
-        if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
-
-        console.log("Automatically downloading PSADT 4.1.8...");
-        await downloadFile(psadtUrl, zipPath);
-
-        console.log("Extracting PSADT 4.1.8...");
-        const zip = new AdmZip(zipPath);
-        zip.extractAllTo(targetDir, true);
-
-        if (fs.existsSync(markerFile)) {
-          let psadtContent = fs.readFileSync(markerFile, "utf-8");
-          const preInstallTasks = `    ## <Perform Pre-Installation tasks here>
+    // Inject Pre-Installation tasks (NuGet, PS7, WinGet module)
+    if (result.includes("    ## <Perform Pre-Installation tasks here>")) {
+      const preInstallTasks = `    ## <Perform Pre-Installation tasks here>
     if (-not (Get-PackageProvider -Name NuGet -ListAvailable -ErrorAction Ignore)) {
         Write-Host "Installing NuGet provider..."
         Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope AllUsers | Out-Null
@@ -625,7 +609,7 @@ async function startServer() {
         Invoke-Expression "& { $(Invoke-RestMethod https://aka.ms/install-powershell.ps1) } -UseMSI -Quiet"
 
         # 3. Wait for the background MSI to finish
-        $timeout = 120 
+        $timeout = 120
         $timer = 0
         while (-not (Test-Path $pwshPath) -and ($timer -lt $timeout)) {
             Start-Sleep -Seconds 5
@@ -648,10 +632,12 @@ async function startServer() {
     }
 
     Import-Module $moduleName -ErrorAction Stop`;
-          psadtContent = psadtContent.replace("    ## <Perform Pre-Installation tasks here>", preInstallTasks);
+      result = result.replace("    ## <Perform Pre-Installation tasks here>", preInstallTasks);
+    }
 
-          // Inject Installation tasks with __APPID__ placeholder
-          const installTasks = `    ## <Perform Installation tasks here>
+    // Inject Installation tasks with __APPID__ placeholder
+    if (result.includes("    ## <Perform Installation tasks here>")) {
+      const installTasks = `    ## <Perform Installation tasks here>
     # ---------------------------------------------------------
     # DEFINE THE ACTUAL PAYLOAD (Independent of PS Version)
     # ---------------------------------------------------------
@@ -686,10 +672,12 @@ async function startServer() {
         Write-Host "Already running in PowerShell 7. Executing payload..."
         & $scriptPayload
     }`;
-          psadtContent = psadtContent.replace("    ## <Perform Installation tasks here>", installTasks);
+      result = result.replace("    ## <Perform Installation tasks here>", installTasks);
+    }
 
-          // Inject Uninstallation tasks with __APPID__ placeholder
-          const uninstallTasks = `    ## <Perform Uninstallation tasks here>
+    // Inject Uninstallation tasks with __APPID__ placeholder
+    if (result.includes("    ## <Perform Uninstallation tasks here>")) {
+      const uninstallTasks = `    ## <Perform Uninstallation tasks here>
     # ---------------------------------------------------------
     # DEFINE THE ACTUAL PAYLOAD (Independent of PS Version)
     # ---------------------------------------------------------
@@ -724,9 +712,44 @@ async function startServer() {
         Write-Host "Already running in PowerShell 7. Executing payload..."
         & $scriptPayload
     }`;
-          psadtContent = psadtContent.replace("    ## <Perform Uninstallation tasks here>", uninstallTasks);
+      result = result.replace("    ## <Perform Uninstallation tasks here>", uninstallTasks);
+    }
 
-          fs.writeFileSync(markerFile, psadtContent, "utf-8");
+    return result;
+  }
+
+  // Function to setup PSADT automatically
+  let psadtSetupPromise: Promise<void> | null = null;
+  async function setupPsadt() {
+    if (psadtSetupPromise) return psadtSetupPromise;
+    
+    psadtSetupPromise = (async () => {
+      const psadtUrl = "https://github.com/PSAppDeployToolkit/PSAppDeployToolkit/releases/download/4.1.8/PSAppDeployToolkit_Template_v4.zip";
+      const targetDir = path.join(process.cwd(), "src_packager", "PSADT");
+      const zipPath = path.join(process.cwd(), "PSAppDeployToolkit_Template_v4.zip");
+      const markerFile = path.join(targetDir, "Invoke-AppDeployToolkit.ps1");
+      const psadtModuleDir = path.join(targetDir, "PSAppDeployToolkit");
+
+      if (fs.existsSync(markerFile) && fs.existsSync(psadtModuleDir)) {
+        console.log("PSADT already setup, skipping automatic download.");
+        return;
+      }
+
+      try {
+        if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
+
+        console.log("Automatically downloading PSADT 4.1.8...");
+        await downloadFile(psadtUrl, zipPath);
+
+        console.log("Extracting PSADT 4.1.8...");
+        const zip = new AdmZip(zipPath);
+        zip.extractAllTo(targetDir, true);
+
+        if (fs.existsSync(markerFile)) {
+          const psadtContent = fs.readFileSync(markerFile, "utf-8");
+          const injectedContent = injectPsadtScripts(psadtContent);
+          fs.writeFileSync(markerFile, injectedContent, "utf-8");
+          console.log("Injected scripts and placeholders into PSADT template.");
         }
 
         if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
@@ -794,7 +817,8 @@ async function startServer() {
     const { content } = req.body;
     const templatePath = path.join(process.cwd(), "src_packager", "PSADT", "Invoke-AppDeployToolkit.ps1");
     try {
-      await promisify(fs.writeFile)(templatePath, content, "utf-8");
+      const injectedContent = injectPsadtScripts(content);
+      await promisify(fs.writeFile)(templatePath, injectedContent, "utf-8");
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to save template" });
@@ -900,17 +924,23 @@ async function startServer() {
     try {
       console.log(`Starting Intune import for ${appName} v${version}...`);
 
-      // 1. Replace __APPID__ placeholder in PSADT template with actual AppId
+      // 1. Replace all placeholders in PSADT template with actual app data
       const templatePath = path.join(process.cwd(), "src_packager", "PSADT", "Invoke-AppDeployToolkit.ps1");
       if (!fs.existsSync(templatePath)) {
         throw new Error("PSADT template not found. Please run Setup PSADT first.");
       }
 
-      const escapeAppId = (appId || '').replace(/'/g, "''");
+      const escapePs = (val: string) => (val || '').replace(/'/g, "''");
       const originalTemplate = fs.readFileSync(templatePath, "utf-8");
-      const modifiedTemplate = originalTemplate.replace(/__APPID__/g, escapeAppId);
+      const modifiedTemplate = originalTemplate
+        .replace(/__APPID__/g, escapePs(appId))
+        .replace(/__APPNAME__/g, escapePs(appName))
+        .replace(/__APPVENDOR__/g, escapePs(publisher))
+        .replace(/__APPVERSION__/g, escapePs(version))
+        .replace(/__APPSCRIPTDATE__/g, new Date().toISOString().split('T')[0])
+        .replace(/__APPSCRIPTAUTHOR__/g, escapePs(developer || owner || 'Automacanie'));
       fs.writeFileSync(templatePath, modifiedTemplate, "utf-8");
-      console.log(`Replaced __APPID__ with '${escapeAppId}' in PSADT template.`);
+      console.log(`Replaced all placeholders with app data for '${appName}' in PSADT template.`);
 
       // 2. Run actual wrapping, then restore original template (with __APPID__ placeholder)
       let wrapResult;
