@@ -585,12 +585,12 @@ async function startServer() {
   function injectPsadtScripts(content: string): string {
     let result = content;
 
-    // Inject app detail placeholders into $adtSession block (only if still at defaults)
-    result = result.replace("AppVendor = ''", "AppVendor = '__APPVENDOR__'");
-    result = result.replace("AppName = ''", "AppName = '__APPNAME__'");
-    result = result.replace("AppVersion = ''", "AppVersion = '__APPVERSION__'");
+    // Inject app detail placeholders into $adtSession block (matches any existing value)
+    result = result.replace(/AppVendor = '[^']*'/, "AppVendor = '__APPVENDOR__'");
+    result = result.replace(/AppName = '[^']*'/, "AppName = '__APPNAME__'");
+    result = result.replace(/AppVersion = '[^']*'/, "AppVersion = '__APPVERSION__'");
     result = result.replace(/AppScriptDate = '[^']*'/, "AppScriptDate = '__APPSCRIPTDATE__'");
-    result = result.replace("AppScriptAuthor = '<author name>'", "AppScriptAuthor = '__APPSCRIPTAUTHOR__'");
+    result = result.replace(/AppScriptAuthor = '[^']*'/, "AppScriptAuthor = '__APPSCRIPTAUTHOR__'");
 
     // Inject Pre-Installation tasks (NuGet, PS7, WinGet module)
     if (result.includes("    ## <Perform Pre-Installation tasks here>")) {
