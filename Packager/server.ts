@@ -220,50 +220,55 @@ async function importToIntune(params: {
       # Add a detection rule. Use a script if provided, otherwise default to explorer.exe existence.
       Write-Host "Adding detection rule..."
       $DetectionScript = @'
+# ---------------------------------------------------------
+# DEFINE THE ACTUAL PAYLOAD (Independent of PS Version)
+# ---------------------------------------------------------
+$scriptPayload = {
 $AppId = '${escapePS(appId)}'
-
-# Route to PS7 for winget operations (PSADT runs under 32-bit PS5.1)
-$PS7Path = "$env:ProgramW6432\\PowerShell\\7\\pwsh.exe"
-if (Test-Path $PS7Path) {
-    $result = & $PS7Path -NoProfile -Command {
-        param($Id)
-        Import-Module Microsoft.WinGet.Client -ErrorAction SilentlyContinue
-        $checkApp = Get-WinGetPackage -Id $Id -ErrorAction SilentlyContinue
-        if ($checkApp.Count -gt 0) {
-            $availableUpdate = @($checkApp | Where-Object { $_.IsUpdateAvailable })
-            if ($availableUpdate.Count -gt 0) {
-                $packageObject = $availableUpdate[0]
-                Write-Output "UPDATE:$($packageObject.Id)"
-            } else {
-                Write-Output "INSTALLED"
-            }
-        } else {
-            Write-Output "NOTFOUND"
-        }
-    } -args $AppId
-
-    switch -Wildcard ($result) {
-        "UPDATE:*" {
-            $localID = $result -replace "^UPDATE:",""
-            Write-Output "Update found for $localID. Update required"
-            exit 1
-        }
-        "INSTALLED" {
-            Write-Output "$AppId is installed and up to date"
-            exit 0
-        }
-        "NOTFOUND" {
-            Write-Output "$AppId is not installed"
-            exit 1
-        }
-        default {
-            Write-Output "Detection inconclusive: $result"
-            exit 1
-        }
+$checkApp = get-wingetpackage -Id "$AppId"
+if ($checkApp.Count -gt 0) {
+    $availableUpdate = @($checkApp | Where-Object { $_.IsUpdateAvailable })
+    # Match against the ID property of the objects
+    if ($availableUpdate.Count -gt 0) {
+        $packageObject = $availableUpdate[0]
+        $localID = $packageObject.Id
+        Write-Output "Update found for $localID. Update required"
+        exit 1
     }
-} else {
-    Write-Output "PowerShell 7 not found at $PS7Path"
+    else {
+        Write-Output "$AppId is installed and up to date"
+        exit 0
+    }
+
+}
+else {
+    Write-Output "$AppId is not installed"
     exit 1
+}
+}
+# ---------------------------------------------------------
+# PS7 CHECK AND EXECUTION ROUTING
+# ---------------------------------------------------------
+if ($PSVersionTable.PSVersion.Major -lt 7) {
+
+    $pwshPath = "C:\Program Files\PowerShell\7\pwsh.exe"
+    # Launch pwsh and pass the commands directly
+    Write-Host "Running in PS5.1. Launching commands in PowerShell 7..."
+    & $pwshPath -NoProfile -ExecutionPolicy Bypass -Command $scriptPayload
+
+    if ( $LASTEXITCODE -eq 1 ) {
+        Write-Output "Installation failed or update is required"
+        exit 1
+    }
+    else {
+        Write-Output "Application is installed and up to date"
+        exit 0
+    }
+}
+else {
+    # We are already running in PS7 natively, so just run the payload!
+    Write-Host "Already running in PowerShell 7. Executing payload..."
+    & $scriptPayload
 }
 '@
       $DetectionScriptPath = Join-Path $env:TEMP "DetectionScript_$([Guid]::NewGuid()).ps1"
