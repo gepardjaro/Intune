@@ -482,8 +482,12 @@ async function startServer() {
           
           const stdout = wingetResult.stdout;
           console.log(`Winget search output for "${query}":`, stdout);
-          // Strip ANSI escape codes that winget embeds in output
-          const cleanStdout = stdout.replace(/\x1B\[[0-9;]*[a-zA-Z]|\x1B\].*?\x07|\x1B[^[\]]*./g, '');
+          // Strip ANSI/VT escape codes and all non-printable chars (keep Unicode for CJK names)
+          const cleanStdout = stdout
+            .replace(/\x1B[@-_][0-?]*[ -/]*[@-~]/g, '')
+            .replace(/\x1B\][^\x07]*\x07/g, '')
+            .replace(/\x9B[0-?]*[ -/]*[@-~]/g, '')
+            .replace(/[^\x20-\x7E\r\n\u0080-\uFFFF]/g, '');
           const lines = cleanStdout.split('\n').filter(l => l.trim() !== "");
           
           if (lines.length > 0) {
