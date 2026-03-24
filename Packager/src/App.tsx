@@ -324,7 +324,9 @@ export default function App() {
           installBehavior: state.intune.installBehavior,
           deviceRestartBehavior: state.intune.rebootBehavior,
           showWelcome: state.psadt.showWelcome,
-          showProgress: state.psadt.showProgress
+          showProgress: state.psadt.showProgress,
+          checkArchitecture: state.intune.checkArchitecture,
+          architectures: state.intune.architectures
         })
       });
       const result = await response.json();
@@ -379,7 +381,7 @@ export default function App() {
       intune: {
         ...prev.intune,
         publisher: vendor,
-        developer: vendor
+        developer: (!prev.intune.developer || prev.intune.developer === prev.intune.publisher) ? vendor : prev.intune.developer
       }
     }));
 
@@ -1010,7 +1012,7 @@ export default function App() {
                       >
                         <option value="DetermineByReturnCode">Determine By Return Code</option>
                         <option value="ForceReboot">Force Reboot</option>
-                        <option value="SuppressReboot">Suppress Reboot</option>
+                        <option value="SuppressReboot">No specific action</option>
                         <option value="AppInstallMayForceReboot">App Install May Force Reboot</option>
                       </select>
                     </div>
@@ -1060,9 +1062,41 @@ export default function App() {
                         onChange={e => setState(s => ({ ...s, intune: { ...s.intune, maxInstallationTime: parseInt(e.target.value) } }))}
                       />
                     </div>
+                    <div>
+                      <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5 ml-1">Check Architecture</label>
+                      <div className="flex items-center gap-4 mt-2">
+                        <button
+                          className={`px-4 py-2 rounded-lg text-xs font-bold transition-all ${state.intune.checkArchitecture ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                          onClick={() => setState(s => ({ ...s, intune: { ...s.intune, checkArchitecture: true, architectures: s.intune.architectures.length ? s.intune.architectures : ['x64'] } }))}
+                        >Yes</button>
+                        <button
+                          className={`px-4 py-2 rounded-lg text-xs font-bold transition-all ${!state.intune.checkArchitecture ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                          onClick={() => setState(s => ({ ...s, intune: { ...s.intune, checkArchitecture: false } }))}
+                        >No</button>
+                      </div>
+                      {state.intune.checkArchitecture && (
+                        <div className="flex gap-2 mt-2">
+                          {(['x86', 'x64', 'ARM64'] as const).map(arch => (
+                            <button
+                              key={arch}
+                              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${state.intune.architectures.includes(arch) ? 'bg-indigo-500 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}
+                              onClick={() => setState(s => ({
+                                ...s,
+                                intune: {
+                                  ...s.intune,
+                                  architectures: s.intune.architectures.includes(arch)
+                                    ? s.intune.architectures.filter(a => a !== arch)
+                                    : [...s.intune.architectures, arch]
+                                }
+                              }))}
+                            >{arch}</button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                     <div className="col-span-2">
                       <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5 ml-1">Description</label>
-                      <textarea 
+                      <textarea
                         className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none min-h-[80px]"
                         value={state.package.description}
                         onChange={e => setState(s => ({ ...s, package: { ...s.package, description: e.target.value } }))}

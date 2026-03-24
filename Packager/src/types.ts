@@ -41,6 +41,8 @@ export interface IntuneSettings {
   minOS: string;
   maxInstallationTime: number;
   allowAvailableUninstall: boolean;
+  checkArchitecture: boolean;
+  architectures: ('x86' | 'x64' | 'ARM64')[];
 }
 
 export interface AppState {
@@ -77,7 +79,9 @@ export const INITIAL_STATE: AppState = {
     rebootBehavior: 'DetermineByReturnCode',
     minOS: 'Windows 10 20H2',
     maxInstallationTime: 60,
-    allowAvailableUninstall: false
+    allowAvailableUninstall: false,
+    checkArchitecture: false,
+    architectures: []
   },
   step: 0
 };

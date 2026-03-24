@@ -126,13 +126,15 @@ async function importToIntune(params: {
   allowAvailableUninstall?: boolean;
   installBehavior?: string;
   deviceRestartBehavior?: string;
+  checkArchitecture?: boolean;
+  architectures?: string[];
   credentials: {
     clientId?: string;
     clientSecret?: string;
     tenantId?: string;
   };
 }) {
-  const { filePath, appName, appId, version, publisher, description, category, iconPath, installCommand, uninstallCommand, developer, owner, notes, informationUrl, privacyUrl, minOS, maxInstallationTime, allowAvailableUninstall, installBehavior, deviceRestartBehavior, credentials } = params;
+  const { filePath, appName, appId, version, publisher, description, category, iconPath, installCommand, uninstallCommand, developer, owner, notes, informationUrl, privacyUrl, minOS, maxInstallationTime, allowAvailableUninstall, installBehavior, deviceRestartBehavior, checkArchitecture, architectures, credentials } = params;
   
   // Azure AD Credentials from request or environment
   const clientId = credentials.clientId || process.env.INTUNE_CLIENT_ID;
@@ -218,25 +220,49 @@ async function importToIntune(params: {
       # Add a detection rule. Use a script if provided, otherwise default to explorer.exe existence.
       Write-Host "Adding detection rule..."
       $DetectionScript = @'
-$AppId = '${escapePS(appId)}' # Use exact winget Package identifier
-$checkApp = get-wingetpackage -Id "$AppId"
-if ($checkApp.Count -gt 0) {
-    $availableUpdate = @($checkApp | Where-Object { $_.IsUpdateAvailable })
-    # Match against the ID property of the objects
-    if ($availableUpdate.Count -gt 0) {
-        $packageObject = $availableUpdate[0]
-        $localID = $packageObject.Id
-        Write-Output "Update found for $localID. Update required"
-        exit 1
+$AppId = '${escapePS(appId)}'
+
+# Route to PS7 for winget operations (PSADT runs under 32-bit PS5.1)
+$PS7Path = "$env:ProgramW6432\\PowerShell\\7\\pwsh.exe"
+if (Test-Path $PS7Path) {
+    $result = & $PS7Path -NoProfile -Command {
+        param($Id)
+        Import-Module Microsoft.WinGet.Client -ErrorAction SilentlyContinue
+        $checkApp = Get-WinGetPackage -Id $Id -ErrorAction SilentlyContinue
+        if ($checkApp.Count -gt 0) {
+            $availableUpdate = @($checkApp | Where-Object { $_.IsUpdateAvailable })
+            if ($availableUpdate.Count -gt 0) {
+                $packageObject = $availableUpdate[0]
+                Write-Output "UPDATE:$($packageObject.Id)"
+            } else {
+                Write-Output "INSTALLED"
+            }
+        } else {
+            Write-Output "NOTFOUND"
+        }
+    } -args $AppId
+
+    switch -Wildcard ($result) {
+        "UPDATE:*" {
+            $localID = $result -replace "^UPDATE:",""
+            Write-Output "Update found for $localID. Update required"
+            exit 1
+        }
+        "INSTALLED" {
+            Write-Output "$AppId is installed and up to date"
+            exit 0
+        }
+        "NOTFOUND" {
+            Write-Output "$AppId is not installed"
+            exit 1
+        }
+        default {
+            Write-Output "Detection inconclusive: $result"
+            exit 1
+        }
     }
-    else {
-        Write-Output "$AppId is installed and up to date"
-        exit 0
-    }
-    
-}
-else {
-    Write-Output "$AppId is not installed"
+} else {
+    Write-Output "PowerShell 7 not found at $PS7Path"
     exit 1
 }
 '@
@@ -244,7 +270,36 @@ else {
       $DetectionScript | Out-File -FilePath $DetectionScriptPath -Encoding UTF8
       $DetectionRule = New-IntuneWin32AppDetectionRuleScript -ScriptFile $DetectionScriptPath -EnforceSignatureCheck $false -RunAs32Bit $false
       $AddParams.DetectionRule = $DetectionRule
-      
+
+      # Add requirement rule with architecture
+      ${checkArchitecture && architectures && architectures.length > 0 ? `
+      $archValue = '${architectures.includes('x86') && architectures.includes('x64') ? 'All' : architectures.includes('x64') ? 'x64' : architectures.includes('x86') ? 'x86' : 'All'}'
+      ` : `
+      $archValue = 'All'
+      `}
+      $MinOSMap = @{
+        "Windows 10 1607" = "W10_1607"
+        "Windows 10 1703" = "W10_1703"
+        "Windows 10 1709" = "W10_1709"
+        "Windows 10 1803" = "W10_1803"
+        "Windows 10 1809" = "W10_1809"
+        "Windows 10 1903" = "W10_1903"
+        "Windows 10 1909" = "W10_1909"
+        "Windows 10 2004" = "W10_2004"
+        "Windows 10 20H2" = "W10_20H2"
+        "Windows 10 21H1" = "W10_21H1"
+        "Windows 10 21H2" = "W10_21H2"
+        "Windows 10 22H2" = "W10_22H2"
+        "Windows 11 21H2" = "W11_21H2"
+        "Windows 11 22H2" = "W11_22H2"
+        "Windows 11 23H2" = "W11_23H2"
+        "Windows 11 24H2" = "W11_24H2"
+      }
+      $MappedMinOS = $MinOSMap['${escapePS(minOS || 'Windows 10 20H2')}']
+      if (-not $MappedMinOS) { $MappedMinOS = "W10_20H2" }
+      $RequirementRule = New-IntuneWin32AppRequirementRule -Architecture $archValue -MinimumSupportedWindowsRelease $MappedMinOS
+      $AddParams.RequirementRule = $RequirementRule
+
       # NOTE: The IntuneWin32App module currently has a bug where it passes the literal string path
       # to the Graph API instead of converting it to a base64 Edm.Binary string, causing a ModelValidationFailure.
       # We are temporarily disabling the icon upload to ensure the app imports successfully.
@@ -1004,7 +1059,7 @@ $catRes.value | Select-Object id, displayName | ConvertTo-Json -Compress
 
   // API: Full Import to Intune (Real backend call using IntuneWin32App module)
   app.post("/api/intune/import", async (req, res) => {
-    const { appName, appId, version, publisher, category, description, iconUrl, azure, installCommand, uninstallCommand, developer, owner, notes, informationUrl, privacyUrl, minOS, maxInstallationTime, allowAvailableUninstall, installBehavior, deviceRestartBehavior, showWelcome = true, showProgress = true } = req.body;
+    const { appName, appId, version, publisher, category, description, iconUrl, azure, installCommand, uninstallCommand, developer, owner, notes, informationUrl, privacyUrl, minOS, maxInstallationTime, allowAvailableUninstall, installBehavior, deviceRestartBehavior, showWelcome = true, showProgress = true, checkArchitecture = false, architectures = [] } = req.body;
     
     try {
       console.log(`Starting Intune import for ${appName} v${version}...`);
@@ -1096,6 +1151,8 @@ $catRes.value | Select-Object id, displayName | ConvertTo-Json -Compress
         allowAvailableUninstall,
         installBehavior,
         deviceRestartBehavior,
+        checkArchitecture,
+        architectures,
         credentials: azure || {}
       });
 
