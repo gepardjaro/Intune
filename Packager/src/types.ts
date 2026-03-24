@@ -20,6 +20,8 @@ export interface PSADTSettings {
   installMode: 'Interactive' | 'Silent' | 'NonInteractive' | 'Auto';
   uninstallMode: 'Interactive' | 'Silent' | 'NonInteractive' | 'Auto';
   scriptContent: string;
+  showWelcome: boolean;
+  showProgress: boolean;
 }
 
 export interface IntuneSettings {
@@ -52,10 +54,12 @@ export interface AppState {
 export const INITIAL_STATE: AppState = {
   azure: { tenantId: '', clientId: '', clientSecret: '' },
   package: { name: '', vendor: '', version: '', author: '', description: 'FILL THE DESCRIPTION', packageId: '', moniker: '' },
-  psadt: { 
-    installMode: 'Silent', 
+  psadt: {
+    installMode: 'Silent',
     uninstallMode: 'Silent',
-    scriptContent: ''
+    scriptContent: '',
+    showWelcome: true,
+    showProgress: true
   },
   intune: { 
     publisher: '', 

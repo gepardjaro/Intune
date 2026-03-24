@@ -279,7 +279,9 @@ export default function App() {
           maxInstallationTime: state.intune.maxInstallationTime,
           allowAvailableUninstall: state.intune.allowAvailableUninstall,
           installBehavior: state.intune.installBehavior,
-          deviceRestartBehavior: state.intune.rebootBehavior
+          deviceRestartBehavior: state.intune.rebootBehavior,
+          showWelcome: state.psadt.showWelcome,
+          showProgress: state.psadt.showProgress
         })
       });
       const result = await response.json();
@@ -775,6 +777,40 @@ export default function App() {
                     >
                       {isModifying ? 'Modifying...' : 'Apply AI Changes'}
                     </button>
+                  </div>
+
+                  <div className="bg-white p-6 rounded-3xl border border-gray-200 shadow-sm space-y-4">
+                    <h3 className="font-bold text-sm uppercase tracking-widest text-gray-600">PSADT Options</h3>
+                    <label className="flex items-center justify-between cursor-pointer">
+                      <span className="text-sm text-gray-700">Show-ADTInstallationWelcome</span>
+                      <button
+                        onClick={() => setState(s => ({ ...s, psadt: { ...s.psadt, showWelcome: !s.psadt.showWelcome } }))}
+                        className={cn(
+                          "w-10 h-6 rounded-full transition-colors relative",
+                          state.psadt.showWelcome ? "bg-indigo-600" : "bg-gray-300"
+                        )}
+                      >
+                        <span className={cn(
+                          "absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform",
+                          state.psadt.showWelcome ? "left-[18px]" : "left-0.5"
+                        )} />
+                      </button>
+                    </label>
+                    <label className="flex items-center justify-between cursor-pointer">
+                      <span className="text-sm text-gray-700">Show-ADTInstallationProgress</span>
+                      <button
+                        onClick={() => setState(s => ({ ...s, psadt: { ...s.psadt, showProgress: !s.psadt.showProgress } }))}
+                        className={cn(
+                          "w-10 h-6 rounded-full transition-colors relative",
+                          state.psadt.showProgress ? "bg-indigo-600" : "bg-gray-300"
+                        )}
+                      >
+                        <span className={cn(
+                          "absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform",
+                          state.psadt.showProgress ? "left-[18px]" : "left-0.5"
+                        )} />
+                      </button>
+                    </label>
                   </div>
 
                   <div className="bg-gray-900 p-6 rounded-3xl text-white space-y-4">

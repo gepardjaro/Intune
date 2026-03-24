@@ -918,7 +918,7 @@ async function startServer() {
 
   // API: Full Import to Intune (Real backend call using IntuneWin32App module)
   app.post("/api/intune/import", async (req, res) => {
-    const { appName, appId, version, publisher, category, description, iconUrl, azure, installCommand, uninstallCommand, developer, owner, notes, informationUrl, privacyUrl, minOS, maxInstallationTime, allowAvailableUninstall, installBehavior, deviceRestartBehavior } = req.body;
+    const { appName, appId, version, publisher, category, description, iconUrl, azure, installCommand, uninstallCommand, developer, owner, notes, informationUrl, privacyUrl, minOS, maxInstallationTime, allowAvailableUninstall, installBehavior, deviceRestartBehavior, showWelcome = true, showProgress = true } = req.body;
     
     try {
       console.log(`Starting Intune import for ${appName} v${version}...`);
@@ -940,7 +940,16 @@ async function startServer() {
         .replace(/__APPVERSION__/g, escapePs(version))
         .replace(/__APPSCRIPTDATE__/g, new Date().toISOString().split('T')[0])
         .replace(/__APPSCRIPTAUTHOR__/g, escapePs(developer || owner || 'Automacanie'));
-      fs.writeFileSync(templatePath, modifiedTemplate, "utf-8");
+
+      // Comment out Show-ADTInstallationWelcome / Show-ADTInstallationProgress if toggled off
+      let finalTemplate = modifiedTemplate;
+      if (!showWelcome) {
+        finalTemplate = finalTemplate.replace(/^(\s*)Show-ADTInstallationWelcome\b/gm, '$1#Show-ADTInstallationWelcome');
+      }
+      if (!showProgress) {
+        finalTemplate = finalTemplate.replace(/^(\s*)Show-ADTInstallationProgress\b/gm, '$1#Show-ADTInstallationProgress');
+      }
+      fs.writeFileSync(templatePath, finalTemplate, "utf-8");
       console.log(`Replaced all placeholders with app data for '${appName}' in PSADT template.`);
 
       // 2. Run actual wrapping, then restore original template (with __APPID__ placeholder)
