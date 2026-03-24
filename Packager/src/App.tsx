@@ -34,7 +34,6 @@ export default function App() {
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchType, setSearchType] = useState<'Name' | 'Id' | 'Moniker' | 'AI'>('Name');
   const [aiRequest, setAiRequest] = useState('');
   const [isModifying, setIsModifying] = useState(false);
   const [history, setHistory] = useState<string[]>([]);
@@ -51,9 +50,7 @@ export default function App() {
           const infoData = await infoRes.json();
           setServerPlatform(infoData.platform);
           setHasApiKey(infoData.hasApiKey);
-          if (!infoData.hasApiKey && searchType === 'AI') {
-            setSearchType('Name');
-          }
+          // hasApiKey is used for AI search fallback
         }
 
         // Trigger automatic setup on backend
@@ -337,7 +334,7 @@ export default function App() {
     setIsSearching(true);
     setError(null);
     try {
-      const results = await searchWingetApp(searchQuery, searchType);
+      const results = await searchWingetApp(searchQuery);
       setSearchResults(results);
     } catch (err: any) {
       setError(err.message);
@@ -470,16 +467,17 @@ export default function App() {
         
         <nav className="flex items-center gap-1 bg-gray-100 p-1 rounded-xl">
           {steps.map((s, i) => (
-            <div 
+            <button
               key={i}
+              onClick={() => { setError(null); setState(prev => ({ ...prev, step: i })); }}
               className={cn(
-                "flex items-center gap-2 px-4 py-2 rounded-lg transition-all duration-300",
-                state.step === i ? "bg-white text-indigo-600 shadow-sm" : "text-gray-400"
+                "flex items-center gap-2 px-4 py-2 rounded-lg transition-all duration-300 cursor-pointer",
+                state.step === i ? "bg-white text-indigo-600 shadow-sm" : "text-gray-400 hover:text-gray-600"
               )}
             >
               <s.icon size={16} />
               <span className="text-sm font-semibold hidden md:block">{s.title}</span>
-            </div>
+            </button>
           ))}
         </nav>
 
@@ -615,23 +613,13 @@ export default function App() {
                     <input 
                       type="text" 
                       className="w-full bg-gray-50 border border-gray-200 rounded-2xl pl-12 pr-4 py-4 focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-lg"
-                      placeholder={searchType === 'AI' ? "Describe the app you need..." : "Search by name, ID or moniker..."}
+                      placeholder="Search by name, ID or moniker..."
                       value={searchQuery}
                       onChange={e => setSearchQuery(e.target.value)}
                       onKeyDown={e => e.key === 'Enter' && handleSearch()}
                     />
                   </div>
-                    <select 
-                      className="bg-gray-50 border border-gray-200 rounded-2xl px-6 py-4 focus:ring-2 focus:ring-indigo-500 outline-none font-semibold"
-                      value={searchType}
-                      onChange={e => setSearchType(e.target.value as any)}
-                    >
-                      <option value="Name">Name</option>
-                      <option value="Id">ID</option>
-                      <option value="Moniker">Moniker</option>
-                      {hasApiKey && <option value="AI">AI Search ✨</option>}
-                    </select>
-                  <button 
+                  <button
                     onClick={handleSearch}
                     disabled={isSearching}
                     className="bg-indigo-600 text-white px-8 py-4 rounded-2xl font-bold hover:bg-indigo-700 transition-all disabled:opacity-50"

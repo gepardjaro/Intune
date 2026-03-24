@@ -474,9 +474,9 @@ async function startServer() {
           // Try with --source winget first
           let wingetResult;
           try {
-            wingetResult = await execAsync(`winget search "${query}" --source winget --accept-source-agreements`);
+            wingetResult = await execAsync(`winget search "${query}" --accept-source-agreements`);
           } catch (e) {
-            console.warn("Winget search with --source winget failed, trying without source...");
+            console.warn("Winget search failed, trying without source...");
             wingetResult = await execAsync(`winget search "${query}" --accept-source-agreements`);
           }
           

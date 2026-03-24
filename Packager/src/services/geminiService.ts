@@ -3,7 +3,7 @@ import { GoogleGenAI, Type } from "@google/genai";
 const apiKey = process.env.GEMINI_API_KEY || '';
 const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
 
-export const searchWingetApp = async (query: string, searchType: 'Name' | 'Id' | 'Moniker' | 'AI') => {
+export const searchWingetApp = async (query: string) => {
   const performAiSearch = async () => {
     if (!ai) {
       // If no AI key, return some high-quality mock data so the user can still test the app
@@ -43,10 +43,6 @@ export const searchWingetApp = async (query: string, searchType: 'Name' | 'Id' |
     return results.map((r: any) => ({ ...r, source: 'ai' }));
   };
 
-  if (searchType === 'AI') {
-    return performAiSearch();
-  }
-  
   try {
     const response = await fetch(`/api/search?query=${encodeURIComponent(query)}`);
     if (!response.ok) throw new Error("Failed to search apps via pwsh");
