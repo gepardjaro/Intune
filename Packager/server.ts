@@ -482,7 +482,9 @@ async function startServer() {
           
           const stdout = wingetResult.stdout;
           console.log(`Winget search output for "${query}":`, stdout);
-          const lines = stdout.split('\n').filter(l => l.trim() !== "");
+          // Strip ANSI escape codes that winget embeds in output
+          const cleanStdout = stdout.replace(/\x1B\[[0-9;]*[a-zA-Z]|\x1B\].*?\x07|\x1B[^[\]]*./g, '');
+          const lines = cleanStdout.split('\n').filter(l => l.trim() !== "");
           
           if (lines.length > 0) {
             // Find the separator line (------) which always comes after the header
