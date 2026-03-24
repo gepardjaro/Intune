@@ -1068,7 +1068,7 @@ $catRes.value | Select-Object id, displayName | ConvertTo-Json -Compress
 
   // API: Full Import to Intune (Real backend call using IntuneWin32App module)
   app.post("/api/intune/import", async (req, res) => {
-    const { appName, appId, version, publisher, category, description, iconUrl, azure, installCommand, uninstallCommand, developer, owner, notes, informationUrl, privacyUrl, minOS, maxInstallationTime, allowAvailableUninstall, installBehavior, deviceRestartBehavior, showWelcome = true, showProgress = true, checkArchitecture = false, architectures = [] } = req.body;
+    const { appName, appId, version, publisher, category, description, iconUrl, azure, installCommand, uninstallCommand, developer, owner, notes, informationUrl, privacyUrl, minOS, maxInstallationTime, allowAvailableUninstall, installBehavior, deviceRestartBehavior, showWelcome = true, showProgress = true, checkArchitecture = false, architectures = [], scriptAuthor = '' } = req.body;
     
     try {
       console.log(`Starting Intune import for ${appName} v${version}...`);
@@ -1089,7 +1089,7 @@ $catRes.value | Select-Object id, displayName | ConvertTo-Json -Compress
         .replace(/__APPVENDOR__/g, escapePs(publisher))
         .replace(/__APPVERSION__/g, escapePs(version))
         .replace(/__APPSCRIPTDATE__/g, new Date().toISOString().split('T')[0])
-        .replace(/__APPSCRIPTAUTHOR__/g, escapePs(developer || owner || 'Automacanie'));
+        .replace(/__APPSCRIPTAUTHOR__/g, escapePs(scriptAuthor || 'Automacanie'));
 
       // Comment out Show-ADTInstallationWelcome / Show-ADTInstallationProgress if toggled off
       let finalTemplate = modifiedTemplate;
@@ -1209,7 +1209,7 @@ $catRes.value | Select-Object id, displayName | ConvertTo-Json -Compress
         let injectedContent = injectPsadtScripts(rawContent);
 
         // Replace placeholders with actual app data if provided via query params
-        const { appId, appName, publisher, version, developer, owner } = req.query;
+        const { appId, appName, publisher, version, scriptAuthor: qScriptAuthor } = req.query;
         if (appId || appName || publisher || version) {
           const escapePs = (val: string) => (val || '').replace(/'/g, "''");
           injectedContent = injectedContent
@@ -1218,7 +1218,7 @@ $catRes.value | Select-Object id, displayName | ConvertTo-Json -Compress
             .replace(/__APPVENDOR__/g, escapePs(String(publisher || '')))
             .replace(/__APPVERSION__/g, escapePs(String(version || '')))
             .replace(/__APPSCRIPTDATE__/g, new Date().toISOString().split('T')[0])
-            .replace(/__APPSCRIPTAUTHOR__/g, escapePs(String(developer || owner || 'Automacanie')));
+            .replace(/__APPSCRIPTAUTHOR__/g, escapePs(String(qScriptAuthor || 'Automacanie')));
         }
 
         res.json({ content: injectedContent });

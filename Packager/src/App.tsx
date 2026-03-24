@@ -325,6 +325,7 @@ export default function App() {
           deviceRestartBehavior: state.intune.rebootBehavior,
           showWelcome: state.psadt.showWelcome,
           showProgress: state.psadt.showProgress,
+          scriptAuthor: state.psadt.scriptAuthor,
           checkArchitecture: state.intune.checkArchitecture,
           architectures: state.intune.architectures
         })
@@ -825,6 +826,16 @@ export default function App() {
 
                   <div className="bg-white p-6 rounded-3xl border border-gray-200 shadow-sm space-y-4">
                     <h3 className="font-bold text-sm uppercase tracking-widest text-gray-600">PSADT Options</h3>
+                    <div>
+                      <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5 ml-1">Script Author</label>
+                      <input
+                        type="text"
+                        className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                        placeholder="Automacanie"
+                        value={state.psadt.scriptAuthor}
+                        onChange={e => setState(s => ({ ...s, psadt: { ...s.psadt, scriptAuthor: e.target.value } }))}
+                      />
+                    </div>
                     <label className="flex items-center justify-between cursor-pointer">
                       <span className="text-sm text-gray-700">Show-ADTInstallationWelcome</span>
                       <button

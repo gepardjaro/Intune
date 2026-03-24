@@ -20,6 +20,7 @@ export interface PSADTSettings {
   installMode: 'Interactive' | 'Silent' | 'NonInteractive' | 'Auto';
   uninstallMode: 'Interactive' | 'Silent' | 'NonInteractive' | 'Auto';
   scriptContent: string;
+  scriptAuthor: string;
   showWelcome: boolean;
   showProgress: boolean;
 }
@@ -60,6 +61,7 @@ export const INITIAL_STATE: AppState = {
     installMode: 'Silent',
     uninstallMode: 'Silent',
     scriptContent: '',
+    scriptAuthor: '',
     showWelcome: true,
     showProgress: true
   },
