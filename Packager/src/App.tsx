@@ -118,6 +118,33 @@ export default function App() {
   const [iconSearch, setIconSearch] = useState('');
   const [isImportingToIntune, setIsImportingToIntune] = useState(false);
   const [importResult, setImportResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [categories, setCategories] = useState<{ id: string; displayName: string }[]>([]);
+  const [isFetchingCategories, setIsFetchingCategories] = useState(false);
+
+  const fetchCategories = async () => {
+    if (!state.azure.tenantId || !state.azure.clientId || !state.azure.clientSecret) {
+      setError("Azure credentials are required to fetch categories.");
+      return;
+    }
+    setIsFetchingCategories(true);
+    try {
+      const res = await fetch('/api/intune/categories', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ azure: state.azure })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setCategories(data);
+      } else {
+        setError(data.error || "Failed to fetch categories.");
+      }
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setIsFetchingCategories(false);
+    }
+  };
 
   const saveTemplate = async () => {
     setIsSavingTemplate(true);
@@ -928,13 +955,25 @@ export default function App() {
                     </div>
                     <div>
                       <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5 ml-1">Category</label>
-                      <input 
-                        type="text" 
-                        className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none"
-                        placeholder="e.g. Productivity, Utilities..."
-                        value={state.intune.category}
-                        onChange={e => setState(s => ({ ...s, intune: { ...s.intune, category: e.target.value } }))}
-                      />
+                      <div className="flex gap-2">
+                        <select
+                          className="flex-1 bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none"
+                          value={state.intune.category}
+                          onChange={e => setState(s => ({ ...s, intune: { ...s.intune, category: e.target.value } }))}
+                        >
+                          <option value="">Select category...</option>
+                          {categories.map(cat => (
+                            <option key={cat.id} value={cat.displayName}>{cat.displayName}</option>
+                          ))}
+                        </select>
+                        <button
+                          onClick={fetchCategories}
+                          disabled={isFetchingCategories}
+                          className="px-4 py-3 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 transition-all disabled:opacity-50 whitespace-nowrap"
+                        >
+                          {isFetchingCategories ? 'Loading...' : 'Fetch'}
+                        </button>
+                      </div>
                     </div>
                     <div>
                       <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5 ml-1">Behavior</label>

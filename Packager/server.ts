@@ -387,17 +387,7 @@ else {
               if ($catRes.value.Count -gt 0) {
                   $catId = $catRes.value[0].id
               } else {
-                  Write-Host "Category '$catName' not found. Creating it..."
-                  $newCatPayload = @{
-                      "@odata.type" = "#microsoft.graph.mobileAppCategory"
-                      displayName = $catName
-                  } | ConvertTo-Json -Depth 10
-                  try {
-                      $newCatRes = Invoke-RestMethod -Uri "https://graph.microsoft.com/beta/deviceAppManagement/mobileAppCategories" -Method POST -Headers @{Authorization = $authToken; "Content-Type" = "application/json"} -Body $newCatPayload
-                      $catId = $newCatRes.id
-                  } catch {
-                      Write-Host "Failed to create category: $_"
-                  }
+                  Write-Host "Category '$catName' not found in tenant. Skipping assignment."
               }
 
               if ($catId) {
@@ -913,6 +903,65 @@ async function startServer() {
       res.json({ success: true, message: "Icons repository setup complete" });
     } catch (error) {
       res.status(500).json({ error: "Failed to setup Icons repository: " + error.message });
+    }
+  });
+
+  // API: Fetch Intune app categories from tenant
+  app.post("/api/intune/categories", async (req, res) => {
+    const { azure } = req.body;
+    if (!azure?.tenantId || !azure?.clientId || !azure?.clientSecret) {
+      return res.status(400).json({ error: "Azure credentials are required." });
+    }
+
+    const psScript = `
+$ErrorActionPreference = 'Stop'
+if (-not (Get-Module -ListAvailable -Name IntuneWin32App)) {
+    Install-Module -Name IntuneWin32App -Force -Scope CurrentUser -AllowClobber
+}
+if (-not (Get-Module -Name IntuneWin32App)) {
+    Import-Module IntuneWin32App
+}
+
+$TID = $env:IMPORT_TENANT_ID
+$CID = $env:IMPORT_CLIENT_ID
+$Secret = $env:IMPORT_CLIENT_SECRET
+
+try {
+    $global:graphAuth = Connect-MSIntuneGraph -TenantID $TID -ClientID $CID -ClientSecret $Secret -ErrorAction Stop
+} catch {
+    $SecureSecret = ConvertTo-SecureString $Secret -AsPlainText -Force
+    $global:graphAuth = Connect-MSIntuneGraph -TenantID $TID -ClientID $CID -ClientSecret $SecureSecret -ErrorAction Stop
+}
+
+$authToken = $global:graphAuth.Authorization
+if (-not $authToken) {
+    if ($global:authToken) { $authToken = $global:authToken }
+    elseif ($global:MSGraphToken) { $authToken = $global:MSGraphToken }
+}
+
+$catRes = Invoke-RestMethod -Uri "https://graph.microsoft.com/beta/deviceAppManagement/mobileAppCategories" -Method GET -Headers @{Authorization = $authToken}
+$catRes.value | Select-Object id, displayName | ConvertTo-Json -Compress
+`;
+
+    const scriptPath = path.join(process.cwd(), "temp_categories.ps1");
+    fs.writeFileSync(scriptPath, psScript, "utf-8");
+
+    try {
+      const result = await execAsync(`pwsh -File "${scriptPath}"`, {
+        env: {
+          ...process.env,
+          IMPORT_TENANT_ID: azure.tenantId,
+          IMPORT_CLIENT_ID: azure.clientId,
+          IMPORT_CLIENT_SECRET: azure.clientSecret
+        }
+      });
+      const categories = JSON.parse(result.stdout.trim() || '[]');
+      res.json(Array.isArray(categories) ? categories : [categories]);
+    } catch (error: any) {
+      console.error("Failed to fetch categories:", error.message);
+      res.status(500).json({ error: error.message });
+    } finally {
+      if (fs.existsSync(scriptPath)) fs.unlinkSync(scriptPath);
     }
   });
 
