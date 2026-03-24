@@ -485,15 +485,13 @@ async function startServer() {
           const lines = stdout.split('\n').filter(l => l.trim() !== "");
           
           if (lines.length > 0) {
-            // Find the index of the header line (contains "Name" and "Id")
-            const headerIndex = lines.findIndex(l => l.includes("Name") && l.includes("Id"));
-            if (headerIndex !== -1 && lines.length > headerIndex + 1) {
-              // Use separator line (---) to determine column positions
-              const headerLine = lines[headerIndex];
-              const separatorLine = lines[headerIndex + 1] || '';
+            // Find the separator line (------) which always comes after the header
+            const sepIndex = lines.findIndex(l => /^[-\s]+$/.test(l.trim()) && l.includes('---'));
+            if (sepIndex > 0 && lines.length > sepIndex + 1) {
+              const headerLine = lines[sepIndex - 1];
+              console.log(`Header line: "${headerLine}"`);
 
               // Try column-position parsing using the header
-              // Match whole words only to avoid false matches
               const idMatch = headerLine.match(/\bId\b/);
               const versionMatch = headerLine.match(/\bVersion\b/);
               const sourceMatch = headerLine.match(/\bSource\b/);
@@ -502,7 +500,8 @@ async function startServer() {
               const versionCol = versionMatch ? versionMatch.index! : -1;
               const sourceCol = sourceMatch ? sourceMatch.index! : -1;
 
-              const dataLines = lines.slice(headerIndex + 2);
+              const dataLines = lines.slice(sepIndex + 1);
+              console.log(`Parsing ${dataLines.length} data lines, idCol=${idCol}, versionCol=${versionCol}, sourceCol=${sourceCol}`);
 
               if (idCol > 0 && versionCol > 0) {
                 // Fixed-width column parsing
