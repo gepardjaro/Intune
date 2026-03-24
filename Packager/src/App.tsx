@@ -87,7 +87,19 @@ export default function App() {
       content = content.replace(/\[\[Vendor\]\]/g, state.package.vendor || 'Unknown Vendor');
       content = content.replace(/\[\[Version\]\]/g, state.package.version || '0.0.0');
       content = content.replace(/\[\[PackageId\]\]/g, state.package.packageId || 'unknown.package');
-      
+
+      // Apply Show-ADT toggles in the preview
+      if (!state.psadt.showWelcome) {
+        content = content.replace(/^(\s*)Show-ADTInstallationWelcome\b/gm, '$1#Show-ADTInstallationWelcome');
+      } else {
+        content = content.replace(/^(\s*)#Show-ADTInstallationWelcome\b/gm, '$1Show-ADTInstallationWelcome');
+      }
+      if (!state.psadt.showProgress) {
+        content = content.replace(/^(\s*)Show-ADTInstallationProgress\b/gm, '$1#Show-ADTInstallationProgress');
+      } else {
+        content = content.replace(/^(\s*)#Show-ADTInstallationProgress\b/gm, '$1Show-ADTInstallationProgress');
+      }
+
       if (content !== state.psadt.scriptContent) {
         setState(prev => ({ ...prev, psadt: { ...prev.psadt, scriptContent: content } }));
       }
@@ -107,7 +119,7 @@ export default function App() {
         }));
       }
     }
-  }, [state.package.name, state.package.version, state.package.vendor, state.package.packageId, baseTemplate, state.psadt.installMode, state.intune.uninstallDeployMode]);
+  }, [state.package.name, state.package.version, state.package.vendor, state.package.packageId, baseTemplate, state.psadt.installMode, state.intune.uninstallDeployMode, state.psadt.showWelcome, state.psadt.showProgress]);
 
   const [isSavingTemplate, setIsSavingTemplate] = useState(false);
   const [isIconPickerOpen, setIsIconPickerOpen] = useState(false);
@@ -142,6 +154,13 @@ export default function App() {
       setIsFetchingCategories(false);
     }
   };
+
+  // Auto-fetch categories when Azure credentials are all filled in
+  useEffect(() => {
+    if (state.azure.tenantId && state.azure.clientId && state.azure.clientSecret && categories.length === 0) {
+      fetchCategories();
+    }
+  }, [state.azure.tenantId, state.azure.clientId, state.azure.clientSecret]);
 
   const saveTemplate = async () => {
     setIsSavingTemplate(true);
@@ -713,18 +732,24 @@ export default function App() {
                 <div className="flex items-center gap-4">
                   <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">DeployMode:</span>
                   <div className="bg-white p-1 rounded-xl border border-gray-200 flex">
-                    {(['Interactive', 'Silent', 'NonInteractive', 'Auto'] as const).map(mode => (
-                      <button
-                        key={mode}
-                        onClick={() => setState(s => ({ ...s, psadt: { ...s.psadt, installMode: mode } }))}
-                        className={cn(
-                          "px-4 py-2 rounded-lg text-xs font-bold transition-all",
-                          state.psadt.installMode === mode ? "bg-indigo-600 text-white shadow-sm" : "text-gray-400 hover:text-gray-600"
-                        )}
-                      >
-                        {mode === 'Auto' ? 'Auto (AI detection)' : mode}
-                      </button>
-                    ))}
+                    {(['Interactive', 'Silent', 'NonInteractive', 'Auto'] as const).map(mode => {
+                      const isAutoDisabled = mode === 'Auto' && !hasApiKey;
+                      return (
+                        <button
+                          key={mode}
+                          disabled={isAutoDisabled}
+                          onClick={() => setState(s => ({ ...s, psadt: { ...s.psadt, installMode: mode } }))}
+                          className={cn(
+                            "px-4 py-2 rounded-lg text-xs font-bold transition-all",
+                            state.psadt.installMode === mode ? "bg-indigo-600 text-white shadow-sm" : "text-gray-400 hover:text-gray-600",
+                            isAutoDisabled && "opacity-40 cursor-not-allowed"
+                          )}
+                          title={isAutoDisabled ? "Requires Gemini API key" : undefined}
+                        >
+                          {mode === 'Auto' ? 'Auto (AI detection)' : mode}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
               </div>
@@ -961,7 +986,7 @@ export default function App() {
                           disabled={isFetchingCategories}
                           className="px-4 py-3 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 transition-all disabled:opacity-50 whitespace-nowrap"
                         >
-                          {isFetchingCategories ? 'Loading...' : 'Fetch'}
+                          {isFetchingCategories ? 'Loading...' : 'Refresh'}
                         </button>
                       </div>
                     </div>
@@ -1108,6 +1133,12 @@ export default function App() {
                           >
                             <Search size={14} />
                             Choose icon manually
+                          </button>
+                          <button
+                            onClick={() => setState(s => ({ ...s, intune: { ...s.intune, iconUrl: '' } }))}
+                            className="text-gray-500 font-bold text-sm hover:underline flex items-center gap-1 border-l pl-3 border-gray-200"
+                          >
+                            No icon
                           </button>
                         </div>
                       </div>

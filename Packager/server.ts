@@ -488,20 +488,25 @@ async function startServer() {
             // Find the index of the header line (contains "Name" and "Id")
             const headerIndex = lines.findIndex(l => l.includes("Name") && l.includes("Id"));
             if (headerIndex !== -1 && lines.length > headerIndex + 1) {
+              // Use header column positions for fixed-width parsing
+              const headerLine = lines[headerIndex];
+              const nameCol = 0;
+              const idCol = headerLine.indexOf("Id");
+              const versionCol = headerLine.indexOf("Version");
+              const sourceCol = headerLine.indexOf("Source");
+
               // The line after header is usually the separator line (---)
               const dataLines = lines.slice(headerIndex + 2);
               results = dataLines.map(line => {
-                // winget output uses fixed width columns usually, but let's try splitting by multiple spaces
-                const parts = line.split(/\s{2,}/);
-                if (parts.length >= 3) {
-                  return {
-                    Name: parts[0].trim(),
-                    Id: parts[1].trim(),
-                    Version: parts[2].trim(),
-                    Source: (parts.length >= 4 ? parts[parts.length - 1].trim() : 'winget') || 'winget'
-                  };
-                }
-                return null;
+                if (line.length < versionCol) return null;
+                const name = line.substring(nameCol, idCol).trim();
+                const id = line.substring(idCol, versionCol).trim();
+                const version = sourceCol > 0
+                  ? line.substring(versionCol, sourceCol).trim().split(/\s+/)[0]
+                  : line.substring(versionCol).trim().split(/\s+/)[0];
+                const source = sourceCol > 0 ? line.substring(sourceCol).trim() : 'winget';
+                if (!name || !id) return null;
+                return { Name: name, Id: id, Version: version || "Unknown", Source: source || 'winget' };
               }).filter(Boolean);
               console.log(`Found ${results.length} results via direct winget search`);
             }
@@ -1003,6 +1008,20 @@ $catRes.value | Select-Object id, displayName | ConvertTo-Json -Compress
       }
       fs.writeFileSync(templatePath, finalTemplate, "utf-8");
       console.log(`Replaced all placeholders with app data for '${appName}' in PSADT template.`);
+
+      // Copy PSADT folder to PSADT_<appId> as a backup before wrapping
+      const psadtFolder = path.join(process.cwd(), "src_packager", "PSADT");
+      const safeAppId = (appId || 'unknown').replace(/[^a-zA-Z0-9._-]/g, '_');
+      const backupFolder = path.join(process.cwd(), "src_packager", `PSADT_${safeAppId}`);
+      try {
+        if (fs.existsSync(backupFolder)) {
+          fs.rmSync(backupFolder, { recursive: true });
+        }
+        fs.cpSync(psadtFolder, backupFolder, { recursive: true });
+        console.log(`Copied PSADT folder to ${backupFolder}`);
+      } catch (copyErr: any) {
+        console.warn(`Failed to copy PSADT folder: ${copyErr.message}`);
+      }
 
       // 2. Run actual wrapping, then restore original template (with __APPID__ placeholder)
       let wrapResult;
