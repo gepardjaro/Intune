@@ -598,7 +598,7 @@ async function startServer() {
         Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope AllUsers | Out-Null
     }
 
-    $pwshPath = "$env:ProgramFiles\\PowerShell\\7\\pwsh.exe"
+    $pwshPath = "$env:ProgramW6432\\PowerShell\\7\\pwsh.exe"
     # 1. Check if PowerShell 7 is installed machine-wide
     if (-not (Test-Path $pwshPath)) {
         Write-Host "PowerShell 7 not found. Installing silently for SYSTEM (Machine-wide)..."
@@ -609,9 +609,13 @@ async function startServer() {
         .\\winget.exe install --id $JBNWingetAppID --silent --accept-package-agreements --accept-source-agreements
         $code = $LASTEXITCODE
         Write-Output "winget exit code: $code"
-        if ($code -ne 0) {
-            Write-Error "PowerShell 7 installation failed with exit code $code."
-            exit $code
+        # 0 = success, -1978335189 = already installed (0x8A150019)
+        if ($code -ne 0 -and $code -ne -1978335189) {
+            if (-not (Test-Path $pwshPath)) {
+                Write-Error "PowerShell 7 installation failed with exit code $code."
+                exit $code
+            }
+            Write-Host "winget returned $code but PS7 exists at $pwshPath, continuing..."
         }
         if (-not (Test-Path $pwshPath)) {
             Write-Error "PowerShell 7 installation failed. pwsh.exe not found."
@@ -654,7 +658,7 @@ async function startServer() {
     # PS7 CHECK AND EXECUTION ROUTING
     # ---------------------------------------------------------
     if ($PSVersionTable.PSVersion.Major -lt 7) {
-        $pwshPath = "C:\\Program Files\\PowerShell\\7\\pwsh.exe"
+        $pwshPath = "$env:ProgramW6432\\PowerShell\\7\\pwsh.exe"
         Write-Host "Running in PS5.1. Launching commands in PowerShell 7..."
         & $pwshPath -NoProfile -ExecutionPolicy Bypass -Command $scriptPayload
         if ( $LASTEXITCODE -eq 1 ) {
@@ -694,7 +698,7 @@ async function startServer() {
     # PS7 CHECK AND EXECUTION ROUTING
     # ---------------------------------------------------------
     if ($PSVersionTable.PSVersion.Major -lt 7) {
-        $pwshPath = "C:\\Program Files\\PowerShell\\7\\pwsh.exe"
+        $pwshPath = "$env:ProgramW6432\\PowerShell\\7\\pwsh.exe"
         Write-Host "Running in PS5.1. Launching commands in PowerShell 7..."
         & $pwshPath -NoProfile -ExecutionPolicy Bypass -Command $scriptPayload
         if ( $LASTEXITCODE -eq 1 ) {
