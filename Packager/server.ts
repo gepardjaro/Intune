@@ -604,18 +604,14 @@ async function startServer() {
     # 1. Check if PowerShell 7 is installed machine-wide
     if (-not (Test-Path $pwshPath)) {
         Write-Host "PowerShell 7 not found. Installing silently for SYSTEM (Machine-wide)..."
-
-        # 2. Execute Microsoft's MSI install (Requires Admin/SYSTEM)
-        Invoke-Expression "& { $(Invoke-RestMethod https://aka.ms/install-powershell.ps1) } -UseMSI -Quiet"
-
-        # 3. Wait for the background MSI to finish
-        $timeout = 120
-        $timer = 0
-        while (-not (Test-Path $pwshPath) -and ($timer -lt $timeout)) {
-            Start-Sleep -Seconds 5
-            $timer += 5
-        }
-
+        $JBNWingetAppID = "Microsoft.Powershell"
+        #Help SYSTEM find winget.exe folder
+        Set-Location -Path ("$env:ProgramW6432\\WindowsApps\\Microsoft.DesktopAppInstaller_*_x64__8wekyb3d8bbwe")
+        #Update software with winget.exe
+        .\\winget.exe install --id $JBNWingetAppID --silent --accept-package-agreements --accept-source-agreements
+        $code = $LASTEXITCODE
+        Write-Output "winget exit code: $code"
+        exit $code
         if (-not (Test-Path $pwshPath)) {
             Write-Error "PowerShell 7 installation failed or timed out. Cannot continue."
             exit 1
