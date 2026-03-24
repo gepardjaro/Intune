@@ -564,12 +564,15 @@ async function startServer() {
         const id = app.Id || "unknown";
         // Derive moniker from ID (e.g. Google.Chrome -> chrome)
         const moniker = id.split('.').pop()?.toLowerCase() || "unknown";
-        
+        // Derive publisher from ID (e.g. Microsoft.PowerToys -> Microsoft)
+        const publisher = id.includes('.') ? id.split('.')[0] : (app.Name || "Unknown").split(' ')[0];
+
         return {
           name: app.Name || "Unknown",
           id: id,
           version: app.Version || "0.0.0",
           moniker: moniker,
+          publisher: publisher,
           source: 'winget'
         };
       });

@@ -319,7 +319,7 @@ export default function App() {
   };
 
   const selectApp = (app: any) => {
-    const vendor = app.name.split(' ')[0];
+    const vendor = app.publisher || app.name.split(' ')[0];
     setState(prev => ({
       ...prev,
       package: {
