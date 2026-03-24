@@ -54,7 +54,7 @@ export const searchWingetApp = async (query: string) => {
       return performAiSearch();
     }
     
-    return results.map((r: any) => ({ ...r, source: 'winget' }));
+    return results.map((r: any) => ({ ...r, source: r.source || 'winget' }));
   } catch (err) {
     console.warn("Search via pwsh failed, falling back to AI search:", err);
     return performAiSearch();
