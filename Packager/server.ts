@@ -468,27 +468,22 @@ async function startServer() {
 
       if (isWindows) {
         try {
-          // Direct winget search is usually faster and more reliable on standard Windows
-          // Added --accept-source-agreements to avoid interactive prompts
+          // Run winget through PowerShell to get clean output (no VT escape codes)
           console.log(`Executing direct winget search for: ${query}`);
-          // Try with --source winget first
+          const escapedQuery = query.replace(/'/g, "''");
           let wingetResult;
           try {
-            wingetResult = await execAsync(`winget search "${query}" --accept-source-agreements`);
+            wingetResult = await execAsync(
+              `powershell.exe -NoProfile -Command "winget search '${escapedQuery}' --accept-source-agreements 2>$null | Out-String -Width 500"`
+            );
           } catch (e) {
-            console.warn("Winget search failed, trying without source...");
+            console.warn("Winget search via powershell failed, trying cmd...");
             wingetResult = await execAsync(`winget search "${query}" --accept-source-agreements`);
           }
-          
+
           const stdout = wingetResult.stdout;
           console.log(`Winget search output for "${query}":`, stdout);
-          // Strip ANSI/VT escape codes and all non-printable chars (keep Unicode for CJK names)
-          const cleanStdout = stdout
-            .replace(/\x1B[@-_][0-?]*[ -/]*[@-~]/g, '')
-            .replace(/\x1B\][^\x07]*\x07/g, '')
-            .replace(/\x9B[0-?]*[ -/]*[@-~]/g, '')
-            .replace(/[^\x20-\x7E\r\n\u0080-\uFFFF]/g, '');
-          const lines = cleanStdout.split('\n').filter(l => l.trim() !== "");
+          const lines = stdout.split('\n').filter(l => l.trim() !== "");
           
           if (lines.length > 0) {
             // Find the separator line (------) which always comes after the header
