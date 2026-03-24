@@ -272,11 +272,20 @@ if (Test-Path $PS7Path) {
       $AddParams.DetectionRule = $DetectionRule
 
       # Add requirement rule with architecture
-      ${checkArchitecture && architectures && architectures.length > 0 ? `
-      $archValue = '${architectures.includes('x86') && architectures.includes('x64') ? 'All' : architectures.includes('x64') ? 'x64' : architectures.includes('x86') ? 'x86' : 'All'}'
-      ` : `
-      $archValue = 'All'
-      `}
+      ${(() => {
+        if (checkArchitecture && architectures && architectures.length > 0) {
+          const hasX86 = architectures.includes('x86');
+          const hasX64 = architectures.includes('x64');
+          const hasARM64 = architectures.includes('ARM64');
+          if (hasARM64 && (hasX86 || hasX64)) return `$archValue = 'AllWithARM64'`;
+          if (hasX86 && hasX64) return `$archValue = 'x64x86'`;
+          if (hasARM64) return `$archValue = 'arm64'`;
+          if (hasX64) return `$archValue = 'x64'`;
+          if (hasX86) return `$archValue = 'x86'`;
+          return `$archValue = 'x64'`;
+        }
+        return `$archValue = 'x64'`;
+      })()}
       $MinOSMap = @{
         "Windows 10 1607" = "W10_1607"
         "Windows 10 1703" = "W10_1703"
