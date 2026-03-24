@@ -498,7 +498,7 @@ async function startServer() {
                     Name: parts[0].trim(),
                     Id: parts[1].trim(),
                     Version: parts[2].trim(),
-                    Source: 'winget'
+                    Source: (parts.length >= 4 ? parts[parts.length - 1].trim() : 'winget') || 'winget'
                   };
                 }
                 return null;
@@ -563,7 +563,7 @@ async function startServer() {
           version: app.Version || "0.0.0",
           moniker: moniker,
           publisher: publisher,
-          source: 'winget'
+          source: app.Source || 'winget'
         };
       });
 
@@ -604,9 +604,12 @@ async function startServer() {
         .\\winget.exe install --id $JBNWingetAppID --silent --accept-package-agreements --accept-source-agreements
         $code = $LASTEXITCODE
         Write-Output "winget exit code: $code"
-        exit $code
+        if ($code -ne 0) {
+            Write-Error "PowerShell 7 installation failed with exit code $code."
+            exit $code
+        }
         if (-not (Test-Path $pwshPath)) {
-            Write-Error "PowerShell 7 installation failed or timed out. Cannot continue."
+            Write-Error "PowerShell 7 installation failed. pwsh.exe not found."
             exit 1
         }
         Write-Host "PowerShell 7 installed successfully!"

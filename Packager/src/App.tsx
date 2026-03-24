@@ -488,7 +488,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto px-6 py-12">
+      <main className="max-w-[90rem] mx-auto px-6 py-12 text-sm">
         <AnimatePresence mode="wait">
           {error && (
             <motion.div 
@@ -637,6 +637,7 @@ export default function App() {
                           <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase">ID</th>
                           <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase">Version</th>
                           <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase">Moniker</th>
+                          <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase">Source</th>
                           <th className="px-6 py-4 text-right"></th>
                         </tr>
                       </thead>
@@ -664,6 +665,7 @@ export default function App() {
                             <td className="px-6 py-4 font-mono text-sm text-gray-500">{app.id}</td>
                             <td className="px-6 py-4 text-sm font-medium text-indigo-600">{app.version}</td>
                             <td className="px-6 py-4 text-sm text-gray-400">{app.moniker}</td>
+                            <td className="px-6 py-4 text-sm text-gray-400">{app.source}</td>
                             <td className="px-6 py-4 text-right min-w-[140px]">
                               <button 
                                 onClick={(e) => {
@@ -1419,7 +1421,7 @@ export default function App() {
       </main>
 
       {/* Footer */}
-      <footer className="max-w-6xl mx-auto px-6 py-8 border-t border-gray-200 flex flex-col md:flex-row items-center justify-between gap-4 text-gray-400 text-sm">
+      <footer className="max-w-[90rem] mx-auto px-6 py-8 border-t border-gray-200 flex flex-col md:flex-row items-center justify-between gap-4 text-gray-400 text-sm">
         <div className="flex items-center gap-2">
           <ShieldCheck size={16} />
           <span>Enterprise Grade Security</span>
