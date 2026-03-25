@@ -511,7 +511,7 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  app.use(express.json());
+  app.use(express.json({ limit: '10mb' }));
   const localIconsDir = path.join(process.cwd(), "src_packager", "icons", "icons-main", "icons");
   app.use("/icons", express.static(localIconsDir));
 
@@ -1135,6 +1135,7 @@ $catRes.value | Select-Object id, displayName | ConvertTo-Json -Compress
     
     try {
       console.log(`Starting Intune import for ${appName} v${version}...`);
+      console.log(`Script content received: ${scriptContent ? `${scriptContent.length} chars` : 'NONE (will rebuild from template)'}`);
 
       // 1. Write the user's edited script content to the PSADT template
       const templatePath = path.join(process.cwd(), "src_packager", "PSADT", "Invoke-AppDeployToolkit.ps1");
