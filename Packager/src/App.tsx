@@ -79,22 +79,31 @@ export default function App() {
     if (baseTemplate) {
       let content = baseTemplate;
 
-      // PSADT 4.1.8 Template Replacements
-      content = content.replace(/AppVendor = ''/g, `AppVendor = '${state.package.vendor || ''}'`);
-      content = content.replace(/AppName = ''/g, `AppName = '${state.package.name || ''}'`);
-      content = content.replace(/AppVersion = ''/g, `AppVersion = '${state.package.version || ''}'`);
-
       // Legacy/Custom Replacements
       content = content.replace(/\[\[AppName\]\]/g, state.package.name || 'Unknown App');
       content = content.replace(/\[\[Vendor\]\]/g, state.package.vendor || 'Unknown Vendor');
       content = content.replace(/\[\[Version\]\]/g, state.package.version || '0.0.0');
       content = content.replace(/\[\[PackageId\]\]/g, state.package.packageId || 'unknown.package');
 
+      // Apply all PSADT fields from current state
+      const p = state.psadt;
+      content = content.replace(/AppVendor = '[^']*'/, `AppVendor = '${p.appVendor}'`);
+      content = content.replace(/AppName = '[^']*'/, `AppName = '${p.appName}'`);
+      content = content.replace(/AppVersion = '[^']*'/, `AppVersion = '${p.appVersion}'`);
+      content = content.replace(/AppArch = '[^']*'/, `AppArch = '${p.appArch}'`);
+      content = content.replace(/AppLang = '[^']*'/, `AppLang = '${p.appLang}'`);
+      content = content.replace(/AppRevision = '[^']*'/, `AppRevision = '${p.appRevision}'`);
+      content = content.replace(/AppScriptVersion = '[^']*'/, `AppScriptVersion = '${p.appScriptVersion}'`);
+      content = content.replace(/AppScriptDate = '[^']*'/, `AppScriptDate = '${p.appScriptDate}'`);
+      content = content.replace(/AppScriptAuthor = '[^']*'/, `AppScriptAuthor = '${p.appScriptAuthor}'`);
+      content = content.replace(/AppProcessesToClose = @\([^)]*\)/, `AppProcessesToClose = @(${p.appProcessesToClose || "''"})`)
+      content = content.replace(/RequireAdmin = \$\w+/, `RequireAdmin = $${p.requireAdmin}`);
+
       // Apply Show-ADT toggles
-      if (!state.psadt.showWelcome) {
+      if (!p.showWelcome) {
         content = content.replace(/^(\s*)Show-ADTInstallationWelcome\b/gm, '$1#Show-ADTInstallationWelcome');
       }
-      if (!state.psadt.showProgress) {
+      if (!p.showProgress) {
         content = content.replace(/^(\s*)Show-ADTInstallationProgress\b/gm, '$1#Show-ADTInstallationProgress');
       }
 
@@ -102,17 +111,32 @@ export default function App() {
     }
   }, [baseTemplate]);
 
-  // Apply Show-ADT toggles on user's current script content (without rebuilding from template)
+  // Apply PSADT option fields live on user's current script content
   useEffect(() => {
     if (!state.psadt.scriptContent) return;
     let content = state.psadt.scriptContent;
+    const p = state.psadt;
 
-    if (!state.psadt.showWelcome) {
+    // Replace PSADT $adtSession fields
+    content = content.replace(/AppVendor = '[^']*'/, `AppVendor = '${p.appVendor}'`);
+    content = content.replace(/AppName = '[^']*'/, `AppName = '${p.appName}'`);
+    content = content.replace(/AppVersion = '[^']*'/, `AppVersion = '${p.appVersion}'`);
+    content = content.replace(/AppArch = '[^']*'/, `AppArch = '${p.appArch}'`);
+    content = content.replace(/AppLang = '[^']*'/, `AppLang = '${p.appLang}'`);
+    content = content.replace(/AppRevision = '[^']*'/, `AppRevision = '${p.appRevision}'`);
+    content = content.replace(/AppScriptVersion = '[^']*'/, `AppScriptVersion = '${p.appScriptVersion}'`);
+    content = content.replace(/AppScriptDate = '[^']*'/, `AppScriptDate = '${p.appScriptDate}'`);
+    content = content.replace(/AppScriptAuthor = '[^']*'/, `AppScriptAuthor = '${p.appScriptAuthor}'`);
+    content = content.replace(/AppProcessesToClose = @\([^)]*\)/, `AppProcessesToClose = @(${p.appProcessesToClose || "''"})`)
+    content = content.replace(/RequireAdmin = \$\w+/, `RequireAdmin = $${p.requireAdmin}`);
+
+    // Show-ADT toggles
+    if (!p.showWelcome) {
       content = content.replace(/^(\s*)(?<!#)Show-ADTInstallationWelcome\b/gm, '$1#Show-ADTInstallationWelcome');
     } else {
       content = content.replace(/^(\s*)#Show-ADTInstallationWelcome\b/gm, '$1Show-ADTInstallationWelcome');
     }
-    if (!state.psadt.showProgress) {
+    if (!p.showProgress) {
       content = content.replace(/^(\s*)(?<!#)Show-ADTInstallationProgress\b/gm, '$1#Show-ADTInstallationProgress');
     } else {
       content = content.replace(/^(\s*)#Show-ADTInstallationProgress\b/gm, '$1Show-ADTInstallationProgress');
@@ -121,7 +145,7 @@ export default function App() {
     if (content !== state.psadt.scriptContent) {
       setState(prev => ({ ...prev, psadt: { ...prev.psadt, scriptContent: content } }));
     }
-  }, [state.psadt.showWelcome, state.psadt.showProgress]);
+  }, [state.psadt.appVendor, state.psadt.appName, state.psadt.appVersion, state.psadt.appArch, state.psadt.appLang, state.psadt.appRevision, state.psadt.appProcessesToClose, state.psadt.appScriptVersion, state.psadt.appScriptDate, state.psadt.appScriptAuthor, state.psadt.requireAdmin, state.psadt.showWelcome, state.psadt.showProgress]);
 
   // Sync Intune commands when deploy modes change
   useEffect(() => {
@@ -344,7 +368,7 @@ export default function App() {
           deviceRestartBehavior: state.intune.rebootBehavior,
           showWelcome: state.psadt.showWelcome,
           showProgress: state.psadt.showProgress,
-          scriptAuthor: state.psadt.scriptAuthor,
+          scriptAuthor: state.psadt.appScriptAuthor,
           scriptContent: state.psadt.scriptContent,
           checkArchitecture: state.intune.checkArchitecture,
           architectures: state.intune.architectures
@@ -398,6 +422,13 @@ export default function App() {
         moniker: app.moniker,
         vendor: vendor,
         description: prev.package.description || 'FILL THE DESCRIPTION'
+      },
+      psadt: {
+        ...prev.psadt,
+        appVendor: vendor,
+        appName: app.name,
+        appVersion: app.version,
+        appScriptDate: new Date().toISOString().split('T')[0]
       },
       intune: {
         ...prev.intune,
@@ -481,7 +512,7 @@ export default function App() {
         appName: state.package.name,
         publisher: state.package.vendor,
         version: state.package.version,
-        scriptAuthor: state.psadt.scriptAuthor
+        scriptAuthor: state.psadt.appScriptAuthor
       });
       const res = await fetch(`/api/psadt/reload?${params}`);
       if (res.ok) {
@@ -527,7 +558,7 @@ export default function App() {
     { title: 'Azure Setup', icon: ShieldCheck },
     { title: 'Search App', icon: Search },
     { title: 'PSADT Config', icon: FileCode },
-    { title: 'Intune Details', icon: Package },
+    { title: 'Package App Details', icon: Package },
     { title: 'Summary', icon: CheckCircle2 }
   ];
 
@@ -914,71 +945,89 @@ export default function App() {
 
                   <div className="bg-white p-6 rounded-3xl border border-gray-200 shadow-sm space-y-4">
                     <h3 className="font-bold text-sm uppercase tracking-widest text-gray-600">PSADT Options</h3>
-                    <div>
-                      <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5 ml-1">Script Author</label>
-                      <input
-                        type="text"
-                        className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
-                        placeholder="Automacanie"
-                        value={state.psadt.scriptAuthor}
-                        onChange={e => setState(s => ({ ...s, psadt: { ...s.psadt, scriptAuthor: e.target.value } }))}
-                      />
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1 ml-1">AppVendor</label>
+                        <input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" value={state.psadt.appVendor} onChange={e => setState(s => ({ ...s, psadt: { ...s.psadt, appVendor: e.target.value } }))} />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1 ml-1">AppName</label>
+                        <input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" value={state.psadt.appName} onChange={e => setState(s => ({ ...s, psadt: { ...s.psadt, appName: e.target.value } }))} />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1 ml-1">AppVersion</label>
+                        <input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" value={state.psadt.appVersion} onChange={e => setState(s => ({ ...s, psadt: { ...s.psadt, appVersion: e.target.value } }))} />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1 ml-1">AppArch</label>
+                        <input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" value={state.psadt.appArch} onChange={e => setState(s => ({ ...s, psadt: { ...s.psadt, appArch: e.target.value } }))} />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1 ml-1">AppLang</label>
+                        <input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" value={state.psadt.appLang} onChange={e => setState(s => ({ ...s, psadt: { ...s.psadt, appLang: e.target.value } }))} />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1 ml-1">AppRevision</label>
+                        <input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" value={state.psadt.appRevision} onChange={e => setState(s => ({ ...s, psadt: { ...s.psadt, appRevision: e.target.value } }))} />
+                      </div>
+                      <div className="col-span-2">
+                        <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1 ml-1">AppProcessesToClose</label>
+                        <input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none font-mono" placeholder="'process1','process2'" value={state.psadt.appProcessesToClose} onChange={e => setState(s => ({ ...s, psadt: { ...s.psadt, appProcessesToClose: e.target.value } }))} />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1 ml-1">AppScriptVersion</label>
+                        <input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" value={state.psadt.appScriptVersion} onChange={e => setState(s => ({ ...s, psadt: { ...s.psadt, appScriptVersion: e.target.value } }))} />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1 ml-1">AppScriptDate</label>
+                        <input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" value={state.psadt.appScriptDate} onChange={e => setState(s => ({ ...s, psadt: { ...s.psadt, appScriptDate: e.target.value } }))} />
+                      </div>
+                      <div className="col-span-2">
+                        <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1 ml-1">AppScriptAuthor</label>
+                        <input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="Automacanie" value={state.psadt.appScriptAuthor} onChange={e => setState(s => ({ ...s, psadt: { ...s.psadt, appScriptAuthor: e.target.value } }))} />
+                      </div>
+                      <div className="col-span-2">
+                        <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1 ml-1">RequireAdmin</label>
+                        <select className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" value={state.psadt.requireAdmin ? '$true' : '$false'} onChange={e => setState(s => ({ ...s, psadt: { ...s.psadt, requireAdmin: e.target.value === '$true' } }))}>
+                          <option value="$true">$true</option>
+                          <option value="$false">$false</option>
+                        </select>
+                      </div>
                     </div>
-                    <label className="flex items-center justify-between cursor-pointer">
-                      <span className="text-sm text-gray-700">Show-ADTInstallationWelcome</span>
-                      <button
-                        onClick={() => setState(s => ({ ...s, psadt: { ...s.psadt, showWelcome: !s.psadt.showWelcome } }))}
-                        className={cn(
-                          "w-10 h-6 rounded-full transition-colors relative",
-                          state.psadt.showWelcome ? "bg-indigo-600" : "bg-gray-300"
-                        )}
-                      >
-                        <span className={cn(
-                          "absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform",
-                          state.psadt.showWelcome ? "left-[18px]" : "left-0.5"
-                        )} />
-                      </button>
-                    </label>
-                    <label className="flex items-center justify-between cursor-pointer">
-                      <span className="text-sm text-gray-700">Show-ADTInstallationProgress</span>
-                      <button
-                        onClick={() => setState(s => ({ ...s, psadt: { ...s.psadt, showProgress: !s.psadt.showProgress } }))}
-                        className={cn(
-                          "w-10 h-6 rounded-full transition-colors relative",
-                          state.psadt.showProgress ? "bg-indigo-600" : "bg-gray-300"
-                        )}
-                      >
-                        <span className={cn(
-                          "absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform",
-                          state.psadt.showProgress ? "left-[18px]" : "left-0.5"
-                        )} />
-                      </button>
-                    </label>
+                    <div className="border-t border-gray-100 pt-3 space-y-3">
+                      <label className="flex items-center justify-between cursor-pointer">
+                        <span className="text-sm text-gray-700">Show-ADTInstallationWelcome</span>
+                        <button
+                          onClick={() => setState(s => ({ ...s, psadt: { ...s.psadt, showWelcome: !s.psadt.showWelcome } }))}
+                          className={cn(
+                            "w-10 h-6 rounded-full transition-colors relative",
+                            state.psadt.showWelcome ? "bg-indigo-600" : "bg-gray-300"
+                          )}
+                        >
+                          <span className={cn(
+                            "absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform",
+                            state.psadt.showWelcome ? "left-[18px]" : "left-0.5"
+                          )} />
+                        </button>
+                      </label>
+                      <label className="flex items-center justify-between cursor-pointer">
+                        <span className="text-sm text-gray-700">Show-ADTInstallationProgress</span>
+                        <button
+                          onClick={() => setState(s => ({ ...s, psadt: { ...s.psadt, showProgress: !s.psadt.showProgress } }))}
+                          className={cn(
+                            "w-10 h-6 rounded-full transition-colors relative",
+                            state.psadt.showProgress ? "bg-indigo-600" : "bg-gray-300"
+                          )}
+                        >
+                          <span className={cn(
+                            "absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform",
+                            state.psadt.showProgress ? "left-[18px]" : "left-0.5"
+                          )} />
+                        </button>
+                      </label>
+                    </div>
                   </div>
 
-                  <div className="bg-gray-900 p-6 rounded-3xl text-white space-y-4">
-                    <h3 className="font-bold text-sm uppercase tracking-widest text-indigo-400">Package Info</h3>
-                    <div className="space-y-3">
-                      <div>
-                        <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">App Name</label>
-                        <input 
-                          type="text" 
-                          className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500"
-                          value={state.package.name}
-                          onChange={e => setState(s => ({ ...s, package: { ...s.package, name: e.target.value } }))}
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Version</label>
-                        <input 
-                          type="text" 
-                          className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500"
-                          value={state.package.version}
-                          onChange={e => setState(s => ({ ...s, package: { ...s.package, version: e.target.value } }))}
-                        />
-                      </div>
-                    </div>
-                  </div>
                 </div>
               </div>
 
@@ -1009,13 +1058,31 @@ export default function App() {
               className="space-y-8"
             >
               <div className="max-w-2xl">
-                <h2 className="text-3xl font-bold mb-2">Intune Application Details</h2>
+                <h2 className="text-3xl font-bold mb-2">Package App Details</h2>
                 <p className="text-gray-500">Finalize the metadata that will appear in the Intune Company Portal.</p>
               </div>
 
               <div className="grid md:grid-cols-2 gap-8">
                 <div className="bg-white p-8 rounded-3xl border border-gray-200 shadow-sm space-y-6">
                   <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5 ml-1">App Name</label>
+                      <input
+                        type="text"
+                        className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none"
+                        value={state.package.name}
+                        onChange={e => setState(s => ({ ...s, package: { ...s.package, name: e.target.value } }))}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5 ml-1">Version</label>
+                      <input
+                        type="text"
+                        className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none"
+                        value={state.package.version}
+                        onChange={e => setState(s => ({ ...s, package: { ...s.package, version: e.target.value } }))}
+                      />
+                    </div>
                     <div className="col-span-2">
                       <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5 ml-1">Publisher</label>
                       <input 
