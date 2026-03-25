@@ -932,7 +932,7 @@ async function startServer() {
       const editors: Record<string, string> = {
         'vscode': `code "${templatePath}"`,
         'antigravity': `antigravity "${templatePath}"`,
-        'ise': `powershell -Command "Start-Process powershell_ise -ArgumentList '${templatePath.replace(/'/g, "''")}'"`
+        'ise': `powershell_ise.exe -File "${templatePath}"`
       };
       const cmd = editors[editor];
       if (!cmd) {
@@ -1130,6 +1130,8 @@ $catRes.value | Select-Object id, displayName | ConvertTo-Json -Compress
       }
 
       const escapePs = (val: string) => (val || '').replace(/'/g, "''");
+      // Save the original template so we can restore it after wrapping
+      const originalTemplateOnDisk = fs.readFileSync(templatePath, "utf-8");
       let finalTemplate: string;
       if (scriptContent) {
         // Use the user's edited script directly — all manual changes are preserved
@@ -1177,7 +1179,7 @@ $catRes.value | Select-Object id, displayName | ConvertTo-Json -Compress
         console.log("Wrapping successful for import process.");
       } finally {
         // Always restore the original template, even on failure
-        fs.writeFileSync(templatePath, originalTemplate, "utf-8");
+        fs.writeFileSync(templatePath, originalTemplateOnDisk, "utf-8");
         console.log("Restored original PSADT template after wrapping.");
       }
 

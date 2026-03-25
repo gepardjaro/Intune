@@ -475,7 +475,7 @@ export default function App() {
 
   const reloadFromDisk = async () => {
     try {
-      const res = await fetch('/api/psadt/reload');
+      const res = await fetch(`/api/psadt/reload?t=${Date.now()}`);
       if (res.ok) {
         const data = await res.json();
         setState(prev => ({ ...prev, psadt: { ...prev.psadt, scriptContent: data.content } }));
