@@ -1,13 +1,18 @@
 import { GoogleGenAI, Type } from "@google/genai";
 
-const apiKey = process.env.GEMINI_API_KEY || '';
-const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
+let currentApiKey = process.env.GEMINI_API_KEY || '';
+let ai: GoogleGenAI | null = currentApiKey ? new GoogleGenAI({ apiKey: currentApiKey }) : null;
+
+export const setGeminiApiKey = (key: string) => {
+  currentApiKey = key;
+  ai = key ? new GoogleGenAI({ apiKey: key }) : null;
+};
+
+export const getGeminiApiKey = () => currentApiKey;
 
 export const searchWingetApp = async (query: string) => {
   const performAiSearch = async () => {
     if (!ai) {
-      // If no AI key, return some high-quality mock data so the user can still test the app
-      // and explain why in a console warning.
       const isWindows = /win32/i.test(process.platform) || (typeof window !== 'undefined' && /Win/i.test(navigator.platform));
       const envName = isWindows ? "Windows" : "Linux";
       console.warn(`Gemini API Key is missing and local winget search failed in this environment (${envName}). Providing sample results for testing.`);
@@ -47,13 +52,13 @@ export const searchWingetApp = async (query: string) => {
     const response = await fetch(`/api/search?query=${encodeURIComponent(query)}`);
     if (!response.ok) throw new Error("Failed to search apps via pwsh");
     const results = await response.json();
-    
+
     // Fallback to AI if no results found via pwsh
     if (results.length === 0) {
       console.log("No results via pwsh, falling back to AI search...");
       return performAiSearch();
     }
-    
+
     return results.map((r: any) => ({ ...r, source: r.source || 'winget' }));
   } catch (err) {
     console.warn("Search via pwsh failed, falling back to AI search:", err);

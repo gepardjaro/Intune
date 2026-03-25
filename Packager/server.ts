@@ -517,10 +517,52 @@ async function startServer() {
 
   // API: Get Server Info
   app.get("/api/info", (req, res) => {
-    res.json({ 
+    res.json({
       platform: process.platform,
       hasApiKey: !!process.env.GEMINI_API_KEY
     });
+  });
+
+  // API: Load saved credentials from .env
+  app.get("/api/credentials", (req, res) => {
+    const envPath = path.join(process.cwd(), ".env");
+    const creds: Record<string, string> = {};
+    if (fs.existsSync(envPath)) {
+      const lines = fs.readFileSync(envPath, "utf-8").split('\n');
+      for (const line of lines) {
+        const match = line.match(/^([A-Z_]+)="?([^"]*)"?$/);
+        if (match) creds[match[1]] = match[2];
+      }
+    }
+    res.json({
+      tenantId: creds.INTUNE_TENANT_ID || '',
+      clientId: creds.INTUNE_CLIENT_ID || '',
+      clientSecret: creds.INTUNE_CLIENT_SECRET || '',
+      geminiApiKey: creds.GEMINI_API_KEY || ''
+    });
+  });
+
+  // API: Save credentials to .env
+  app.post("/api/credentials/save", (req, res) => {
+    const { tenantId, clientId, clientSecret, geminiApiKey } = req.body;
+    const envPath = path.join(process.cwd(), ".env");
+    const envContent = [
+      `GEMINI_API_KEY="${geminiApiKey || ''}"`,
+      `INTUNE_TENANT_ID="${tenantId || ''}"`,
+      `INTUNE_CLIENT_ID="${clientId || ''}"`,
+      `INTUNE_CLIENT_SECRET="${clientSecret || ''}"`,
+    ].join('\n') + '\n';
+    try {
+      fs.writeFileSync(envPath, envContent, "utf-8");
+      // Update process.env so changes take effect immediately
+      if (geminiApiKey) process.env.GEMINI_API_KEY = geminiApiKey;
+      if (tenantId) process.env.INTUNE_TENANT_ID = tenantId;
+      if (clientId) process.env.INTUNE_CLIENT_ID = clientId;
+      if (clientSecret) process.env.INTUNE_CLIENT_SECRET = clientSecret;
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
   });
 
   // API: Search Apps using Find-WinGetPackage or winget.exe

@@ -23,7 +23,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { INITIAL_STATE, type AppState, type PackageDetails } from './types';
-import { searchWingetApp, modifyPsadtScript } from './services/geminiService';
+import { searchWingetApp, modifyPsadtScript, setGeminiApiKey } from './services/geminiService';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -41,6 +41,8 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [serverPlatform, setServerPlatform] = useState<string | null>(null);
   const [hasApiKey, setHasApiKey] = useState(false);
+  const [geminiApiKey, setGeminiApiKeyState] = useState('');
+  const [isSavingCreds, setIsSavingCreds] = useState(false);
 
   useEffect(() => {
     const initApp = async () => {
@@ -51,12 +53,32 @@ export default function App() {
           const infoData = await infoRes.json();
           setServerPlatform(infoData.platform);
           setHasApiKey(infoData.hasApiKey);
-          // hasApiKey is used for AI search fallback
+        }
+
+        // Load saved credentials from .env
+        const credsRes = await fetch('/api/credentials');
+        if (credsRes.ok) {
+          const creds = await credsRes.json();
+          if (creds.tenantId || creds.clientId || creds.clientSecret) {
+            setState(prev => ({
+              ...prev,
+              azure: {
+                tenantId: creds.tenantId || prev.azure.tenantId,
+                clientId: creds.clientId || prev.azure.clientId,
+                clientSecret: creds.clientSecret || prev.azure.clientSecret
+              }
+            }));
+          }
+          if (creds.geminiApiKey) {
+            setGeminiApiKeyState(creds.geminiApiKey);
+            setGeminiApiKey(creds.geminiApiKey);
+            setHasApiKey(true);
+          }
         }
 
         // Trigger automatic setup on backend
         await fetch('/api/psadt/setup', { method: 'POST' });
-        
+
         // Fetch template
         const response = await fetch('/api/psadt/template');
         if (response.ok) {
@@ -73,6 +95,37 @@ export default function App() {
     };
     initApp();
   }, []);
+
+  const handleGeminiKeyChange = (key: string) => {
+    setGeminiApiKeyState(key);
+    setGeminiApiKey(key);
+    setHasApiKey(!!key);
+  };
+
+  const saveCredentials = async () => {
+    setIsSavingCreds(true);
+    try {
+      const res = await fetch('/api/credentials/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tenantId: state.azure.tenantId,
+          clientId: state.azure.clientId,
+          clientSecret: state.azure.clientSecret,
+          geminiApiKey
+        })
+      });
+      if (res.ok) {
+        alert('Credentials saved to .env');
+      } else {
+        throw new Error('Failed to save');
+      }
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setIsSavingCreds(false);
+    }
+  };
 
   // Apply template replacements only when baseTemplate changes (initial load / app select)
   useEffect(() => {
@@ -633,8 +686,8 @@ export default function App() {
                   <div className="space-y-4">
                     <div>
                       <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5 ml-1">Tenant ID</label>
-                      <input 
-                        type="text" 
+                      <input
+                        type="text"
                         className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                         placeholder="00000000-0000-0000-0000-000000000000"
                         value={state.azure.tenantId}
@@ -643,8 +696,8 @@ export default function App() {
                     </div>
                     <div>
                       <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5 ml-1">Client ID</label>
-                      <input 
-                        type="text" 
+                      <input
+                        type="text"
                         className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                         placeholder="00000000-0000-0000-0000-000000000000"
                         value={state.azure.clientId}
@@ -653,8 +706,8 @@ export default function App() {
                     </div>
                     <div>
                       <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5 ml-1">Client Secret</label>
-                      <input 
-                        type="password" 
+                      <input
+                        type="password"
                         className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                         placeholder="••••••••••••••••"
                         value={state.azure.clientSecret}
@@ -664,22 +717,35 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="bg-indigo-600 p-8 rounded-3xl text-white shadow-xl shadow-indigo-200 flex flex-col justify-between">
-                  <div>
-                    <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center mb-6">
-                      <Sparkles size={24} />
+                <div className="space-y-6">
+                  <div className="bg-white p-8 rounded-3xl border border-gray-200 shadow-sm space-y-6">
+                    <h3 className="font-bold text-lg flex items-center gap-2">
+                      <Sparkles className="text-indigo-600" size={20} />
+                      AI API Credentials
+                    </h3>
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5 ml-1">Gemini API Key</label>
+                        <input
+                          type="password"
+                          className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                          placeholder="••••••••••••••••"
+                          value={geminiApiKey}
+                          onChange={e => handleGeminiKeyChange(e.target.value)}
+                        />
+                      </div>
+                      <p className="text-xs text-gray-400">Used for AI-powered script modifications and smart app search fallback.</p>
                     </div>
-                    <h3 className="text-2xl font-bold mb-4">AI-Powered Packaging</h3>
-                    <p className="text-indigo-100 leading-relaxed">
-                      Leverage Gemini to automate script modifications, find the best package versions, and generate Intune metadata instantly.
-                    </p>
                   </div>
-                  <div className="mt-8 p-4 bg-white/10 rounded-2xl border border-white/20">
-                    <p className="text-xs font-medium flex items-center gap-2">
-                      <Info size={14} />
-                      Data is processed securely via your provided API key.
-                    </p>
-                  </div>
+
+                  <button
+                    onClick={saveCredentials}
+                    disabled={isSavingCreds}
+                    className="w-full bg-gray-900 text-white py-4 rounded-2xl font-bold hover:bg-gray-800 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                  >
+                    <Download size={16} />
+                    {isSavingCreds ? 'Saving...' : 'Save Credentials to .env'}
+                  </button>
                 </div>
               </div>
 
