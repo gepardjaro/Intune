@@ -685,8 +685,8 @@ async function startServer() {
     result = result.replace(/AppScriptDate = '[^']*'/, "AppScriptDate = '__APPSCRIPTDATE__'");
     result = result.replace(/AppScriptAuthor = '[^']*'/, "AppScriptAuthor = '__APPSCRIPTAUTHOR__'");
 
-    // Inject Pre-Installation tasks (NuGet, PS7, WinGet module)
-    if (result.includes("    ## <Perform Pre-Installation tasks here>")) {
+    // Inject Pre-Installation tasks (NuGet, PS7, WinGet module) — only if not already injected
+    if (result.includes("    ## <Perform Pre-Installation tasks here>") && !result.includes("Install-PackageProvider -Name NuGet")) {
       const preInstallTasks = `    ## <Perform Pre-Installation tasks here>
     if (-not (Get-PackageProvider -Name NuGet -ListAvailable -ErrorAction Ignore)) {
         Write-Host "Installing NuGet provider..."
@@ -731,8 +731,8 @@ async function startServer() {
       result = result.replace("    ## <Perform Pre-Installation tasks here>", preInstallTasks);
     }
 
-    // Inject Installation tasks with __APPID__ placeholder
-    if (result.includes("    ## <Perform Installation tasks here>")) {
+    // Inject Installation tasks — only if not already injected
+    if (result.includes("    ## <Perform Installation tasks here>") && !result.includes("Install-WinGetPackage")) {
       const installTasks = `    ## <Perform Installation tasks here>
     # ---------------------------------------------------------
     # DEFINE THE ACTUAL PAYLOAD (Independent of PS Version)
@@ -771,8 +771,8 @@ async function startServer() {
       result = result.replace("    ## <Perform Installation tasks here>", installTasks);
     }
 
-    // Inject Uninstallation tasks with __APPID__ placeholder
-    if (result.includes("    ## <Perform Uninstallation tasks here>")) {
+    // Inject Uninstallation tasks — only if not already injected
+    if (result.includes("    ## <Perform Uninstallation tasks here>") && !result.includes("Uninstall-WinGetPackage")) {
       const uninstallTasks = `    ## <Perform Uninstallation tasks here>
     # ---------------------------------------------------------
     # DEFINE THE ACTUAL PAYLOAD (Independent of PS Version)
