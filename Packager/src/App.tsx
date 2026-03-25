@@ -12,6 +12,7 @@ import {
   ShieldCheck,
   Download,
   RotateCcw,
+  ExternalLink,
   Sparkles,
   Info,
   RefreshCw,
@@ -73,53 +74,71 @@ export default function App() {
     initApp();
   }, []);
 
+  // Apply template replacements only when baseTemplate changes (initial load / app select)
   useEffect(() => {
     if (baseTemplate) {
       let content = baseTemplate;
-      
+
       // PSADT 4.1.8 Template Replacements
       content = content.replace(/AppVendor = ''/g, `AppVendor = '${state.package.vendor || ''}'`);
       content = content.replace(/AppName = ''/g, `AppName = '${state.package.name || ''}'`);
       content = content.replace(/AppVersion = ''/g, `AppVersion = '${state.package.version || ''}'`);
-      
+
       // Legacy/Custom Replacements
       content = content.replace(/\[\[AppName\]\]/g, state.package.name || 'Unknown App');
       content = content.replace(/\[\[Vendor\]\]/g, state.package.vendor || 'Unknown Vendor');
       content = content.replace(/\[\[Version\]\]/g, state.package.version || '0.0.0');
       content = content.replace(/\[\[PackageId\]\]/g, state.package.packageId || 'unknown.package');
 
-      // Apply Show-ADT toggles in the preview
+      // Apply Show-ADT toggles
       if (!state.psadt.showWelcome) {
         content = content.replace(/^(\s*)Show-ADTInstallationWelcome\b/gm, '$1#Show-ADTInstallationWelcome');
-      } else {
-        content = content.replace(/^(\s*)#Show-ADTInstallationWelcome\b/gm, '$1Show-ADTInstallationWelcome');
       }
       if (!state.psadt.showProgress) {
         content = content.replace(/^(\s*)Show-ADTInstallationProgress\b/gm, '$1#Show-ADTInstallationProgress');
-      } else {
-        content = content.replace(/^(\s*)#Show-ADTInstallationProgress\b/gm, '$1Show-ADTInstallationProgress');
       }
 
-      if (content !== state.psadt.scriptContent) {
-        setState(prev => ({ ...prev, psadt: { ...prev.psadt, scriptContent: content } }));
-      }
-
-      // Sync Intune commands
-      const installCmd = `powershell.exe -ExecutionPolicy Bypass -File "Invoke-AppDeployToolkit.ps1" -DeploymentType "Install" -DeployMode "${state.psadt.installMode}"`;
-      const uninstallCmd = `powershell.exe -ExecutionPolicy Bypass -File "Invoke-AppDeployToolkit.ps1" -DeploymentType "Uninstall" -DeployMode "${state.intune.uninstallDeployMode}"`;
-      
-      if (installCmd !== state.intune.installCommand || uninstallCmd !== state.intune.uninstallCommand) {
-        setState(prev => ({ 
-          ...prev, 
-          intune: { 
-            ...prev.intune, 
-            installCommand: installCmd,
-            uninstallCommand: uninstallCmd
-          } 
-        }));
-      }
+      setState(prev => ({ ...prev, psadt: { ...prev.psadt, scriptContent: content } }));
     }
-  }, [state.package.name, state.package.version, state.package.vendor, state.package.packageId, baseTemplate, state.psadt.installMode, state.intune.uninstallDeployMode, state.psadt.showWelcome, state.psadt.showProgress]);
+  }, [baseTemplate]);
+
+  // Apply Show-ADT toggles on user's current script content (without rebuilding from template)
+  useEffect(() => {
+    if (!state.psadt.scriptContent) return;
+    let content = state.psadt.scriptContent;
+
+    if (!state.psadt.showWelcome) {
+      content = content.replace(/^(\s*)(?<!#)Show-ADTInstallationWelcome\b/gm, '$1#Show-ADTInstallationWelcome');
+    } else {
+      content = content.replace(/^(\s*)#Show-ADTInstallationWelcome\b/gm, '$1Show-ADTInstallationWelcome');
+    }
+    if (!state.psadt.showProgress) {
+      content = content.replace(/^(\s*)(?<!#)Show-ADTInstallationProgress\b/gm, '$1#Show-ADTInstallationProgress');
+    } else {
+      content = content.replace(/^(\s*)#Show-ADTInstallationProgress\b/gm, '$1Show-ADTInstallationProgress');
+    }
+
+    if (content !== state.psadt.scriptContent) {
+      setState(prev => ({ ...prev, psadt: { ...prev.psadt, scriptContent: content } }));
+    }
+  }, [state.psadt.showWelcome, state.psadt.showProgress]);
+
+  // Sync Intune commands when deploy modes change
+  useEffect(() => {
+    const installCmd = `powershell.exe -ExecutionPolicy Bypass -File "Invoke-AppDeployToolkit.ps1" -DeploymentType "Install" -DeployMode "${state.psadt.installMode}"`;
+    const uninstallCmd = `powershell.exe -ExecutionPolicy Bypass -File "Invoke-AppDeployToolkit.ps1" -DeploymentType "Uninstall" -DeployMode "${state.intune.uninstallDeployMode}"`;
+
+    if (installCmd !== state.intune.installCommand || uninstallCmd !== state.intune.uninstallCommand) {
+      setState(prev => ({
+        ...prev,
+        intune: {
+          ...prev.intune,
+          installCommand: installCmd,
+          uninstallCommand: uninstallCmd
+        }
+      }));
+    }
+  }, [state.psadt.installMode, state.intune.uninstallDeployMode]);
 
   const [isSavingTemplate, setIsSavingTemplate] = useState(false);
   const [isIconPickerOpen, setIsIconPickerOpen] = useState(false);
@@ -326,6 +345,7 @@ export default function App() {
           showWelcome: state.psadt.showWelcome,
           showProgress: state.psadt.showProgress,
           scriptAuthor: state.psadt.scriptAuthor,
+          scriptContent: state.psadt.scriptContent,
           checkArchitecture: state.intune.checkArchitecture,
           architectures: state.intune.architectures
         })
@@ -434,6 +454,36 @@ export default function App() {
         psadt: { ...prev.psadt, scriptContent: last }
       }));
       setHistory(prev => prev.slice(0, -1));
+    }
+  };
+
+  const openInEditor = async (editor: 'vscode' | 'antigravity' | 'ise') => {
+    try {
+      const res = await fetch('/api/psadt/open-editor', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ editor, content: state.psadt.scriptContent })
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        setError(data.error || `Failed to open ${editor}`);
+      }
+    } catch (err: any) {
+      setError(`Failed to open ${editor}: ${err.message}`);
+    }
+  };
+
+  const reloadFromDisk = async () => {
+    try {
+      const res = await fetch('/api/psadt/reload');
+      if (res.ok) {
+        const data = await res.json();
+        setState(prev => ({ ...prev, psadt: { ...prev.psadt, scriptContent: data.content } }));
+      } else {
+        setError("Failed to reload script from disk");
+      }
+    } catch (err: any) {
+      setError(`Failed to reload: ${err.message}`);
     }
   };
 
@@ -790,6 +840,36 @@ export default function App() {
                         )}
                         <button className="p-1.5 text-gray-400 hover:text-white transition-colors">
                           <Download size={14} />
+                        </button>
+                        <div className="w-px h-4 bg-white/10" />
+                        <button
+                          onClick={() => openInEditor('vscode')}
+                          className="p-1.5 text-gray-400 hover:text-white transition-colors text-[10px] font-bold uppercase tracking-wider flex items-center gap-1"
+                          title="Open in Visual Studio Code"
+                        >
+                          <ExternalLink size={12} /> VS Code
+                        </button>
+                        <button
+                          onClick={() => openInEditor('antigravity')}
+                          className="p-1.5 text-gray-400 hover:text-white transition-colors text-[10px] font-bold uppercase tracking-wider flex items-center gap-1"
+                          title="Open in Antigravity"
+                        >
+                          <ExternalLink size={12} /> Antigravity
+                        </button>
+                        <button
+                          onClick={() => openInEditor('ise')}
+                          className="p-1.5 text-gray-400 hover:text-white transition-colors text-[10px] font-bold uppercase tracking-wider flex items-center gap-1"
+                          title="Open in PowerShell ISE"
+                        >
+                          <ExternalLink size={12} /> ISE
+                        </button>
+                        <div className="w-px h-4 bg-white/10" />
+                        <button
+                          onClick={reloadFromDisk}
+                          className="p-1.5 text-gray-400 hover:text-white transition-colors text-[10px] font-bold uppercase tracking-wider flex items-center gap-1"
+                          title="Reload script from disk (after external editing)"
+                        >
+                          <RefreshCw size={12} /> Reload
                         </button>
                       </div>
                     </div>

@@ -920,6 +920,51 @@ async function startServer() {
     }
   });
 
+  // API: Open .ps1 in external editor
+  app.post("/api/psadt/open-editor", async (req, res) => {
+    const { editor, content } = req.body;
+    const templatePath = path.join(process.cwd(), "src_packager", "PSADT", "Invoke-AppDeployToolkit.ps1");
+    try {
+      // Save current content before opening
+      if (content) {
+        fs.writeFileSync(templatePath, content, "utf-8");
+      }
+      const editors: Record<string, string> = {
+        'vscode': `code "${templatePath}"`,
+        'antigravity': `antigravity "${templatePath}"`,
+        'ise': `powershell -Command "Start-Process powershell_ise -ArgumentList '${templatePath.replace(/'/g, "''")}'"`
+      };
+      const cmd = editors[editor];
+      if (!cmd) {
+        return res.status(400).json({ error: "Unknown editor" });
+      }
+      exec(cmd, (error) => {
+        if (error) {
+          console.error(`Failed to open editor: ${error.message}`);
+          return res.status(500).json({ error: `Failed to open ${editor}: ${error.message}` });
+        }
+        res.json({ success: true });
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // API: Reload .ps1 from disk (after external editing)
+  app.get("/api/psadt/reload", async (_req, res) => {
+    const templatePath = path.join(process.cwd(), "src_packager", "PSADT", "Invoke-AppDeployToolkit.ps1");
+    try {
+      if (fs.existsSync(templatePath)) {
+        const content = fs.readFileSync(templatePath, "utf-8");
+        res.json({ content });
+      } else {
+        res.status(404).json({ error: "Template file not found" });
+      }
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // API: Wrap Application using IntuneWinAppUtil
   app.post("/api/wrap", async (req, res) => {
     const { appName, version } = req.body;
@@ -1073,36 +1118,40 @@ $catRes.value | Select-Object id, displayName | ConvertTo-Json -Compress
 
   // API: Full Import to Intune (Real backend call using IntuneWin32App module)
   app.post("/api/intune/import", async (req, res) => {
-    const { appName, appId, version, publisher, category, description, iconUrl, azure, installCommand, uninstallCommand, developer, owner, notes, informationUrl, privacyUrl, minOS, maxInstallationTime, allowAvailableUninstall, installBehavior, deviceRestartBehavior, showWelcome = true, showProgress = true, checkArchitecture = false, architectures = [], scriptAuthor = '' } = req.body;
+    const { appName, appId, version, publisher, category, description, iconUrl, azure, installCommand, uninstallCommand, developer, owner, notes, informationUrl, privacyUrl, minOS, maxInstallationTime, allowAvailableUninstall, installBehavior, deviceRestartBehavior, showWelcome = true, showProgress = true, checkArchitecture = false, architectures = [], scriptAuthor = '', scriptContent = '' } = req.body;
     
     try {
       console.log(`Starting Intune import for ${appName} v${version}...`);
 
-      // 1. Replace all placeholders in PSADT template with actual app data
+      // 1. Write the user's edited script content to the PSADT template
       const templatePath = path.join(process.cwd(), "src_packager", "PSADT", "Invoke-AppDeployToolkit.ps1");
       if (!fs.existsSync(templatePath)) {
         throw new Error("PSADT template not found. Please run Setup PSADT first.");
       }
 
       const escapePs = (val: string) => (val || '').replace(/'/g, "''");
-      const rawTemplate = fs.readFileSync(templatePath, "utf-8");
-      // Ensure scripts are injected (safety net for manually replaced templates)
-      const originalTemplate = injectPsadtScripts(rawTemplate);
-      const modifiedTemplate = originalTemplate
-        .replace(/__APPID__/g, escapePs(appId))
-        .replace(/__APPNAME__/g, escapePs(appName))
-        .replace(/__APPVENDOR__/g, escapePs(publisher))
-        .replace(/__APPVERSION__/g, escapePs(version))
-        .replace(/__APPSCRIPTDATE__/g, new Date().toISOString().split('T')[0])
-        .replace(/__APPSCRIPTAUTHOR__/g, escapePs(scriptAuthor || 'Automacanie'));
+      let finalTemplate: string;
+      if (scriptContent) {
+        // Use the user's edited script directly — all manual changes are preserved
+        finalTemplate = scriptContent;
+      } else {
+        // Fallback: rebuild from template on disk (legacy behavior)
+        const rawTemplate = fs.readFileSync(templatePath, "utf-8");
+        const originalTemplate = injectPsadtScripts(rawTemplate);
+        finalTemplate = originalTemplate
+          .replace(/__APPID__/g, escapePs(appId))
+          .replace(/__APPNAME__/g, escapePs(appName))
+          .replace(/__APPVENDOR__/g, escapePs(publisher))
+          .replace(/__APPVERSION__/g, escapePs(version))
+          .replace(/__APPSCRIPTDATE__/g, new Date().toISOString().split('T')[0])
+          .replace(/__APPSCRIPTAUTHOR__/g, escapePs(scriptAuthor || 'Automacanie'));
 
-      // Comment out Show-ADTInstallationWelcome / Show-ADTInstallationProgress if toggled off
-      let finalTemplate = modifiedTemplate;
-      if (!showWelcome) {
-        finalTemplate = finalTemplate.replace(/^(\s*)Show-ADTInstallationWelcome\b/gm, '$1#Show-ADTInstallationWelcome');
-      }
-      if (!showProgress) {
-        finalTemplate = finalTemplate.replace(/^(\s*)Show-ADTInstallationProgress\b/gm, '$1#Show-ADTInstallationProgress');
+        if (!showWelcome) {
+          finalTemplate = finalTemplate.replace(/^(\s*)Show-ADTInstallationWelcome\b/gm, '$1#Show-ADTInstallationWelcome');
+        }
+        if (!showProgress) {
+          finalTemplate = finalTemplate.replace(/^(\s*)Show-ADTInstallationProgress\b/gm, '$1#Show-ADTInstallationProgress');
+        }
       }
       fs.writeFileSync(templatePath, finalTemplate, "utf-8");
       console.log(`Replaced all placeholders with app data for '${appName}' in PSADT template.`);
