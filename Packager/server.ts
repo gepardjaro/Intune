@@ -251,7 +251,7 @@ else {
 # ---------------------------------------------------------
 if ($PSVersionTable.PSVersion.Major -lt 7) {
 
-    $pwshPath = "C:\Program Files\PowerShell\7\pwsh.exe"
+    $pwshPath = "C:\\Program Files\\PowerShell\\7\\pwsh.exe"
     # Launch pwsh and pass the commands directly
     Write-Host "Running in PS5.1. Launching commands in PowerShell 7..."
     & $pwshPath -NoProfile -ExecutionPolicy Bypass -Command $scriptPayload
