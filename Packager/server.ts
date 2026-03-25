@@ -1135,7 +1135,11 @@ $catRes.value | Select-Object id, displayName | ConvertTo-Json -Compress
       let finalTemplate: string;
       if (scriptContent) {
         // Use the user's edited script directly — all manual changes are preserved
+        // Replace the default script author with the user's configured value
         finalTemplate = scriptContent;
+        if (scriptAuthor) {
+          finalTemplate = finalTemplate.replace(/AppScriptAuthor = '[^']*'/, `AppScriptAuthor = '${escapePs(scriptAuthor)}'`);
+        }
       } else {
         // Fallback: rebuild from template on disk (legacy behavior)
         const rawTemplate = fs.readFileSync(templatePath, "utf-8");
