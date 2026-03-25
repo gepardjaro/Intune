@@ -224,27 +224,21 @@ async function importToIntune(params: {
 # DEFINE THE ACTUAL PAYLOAD (Independent of PS Version)
 # ---------------------------------------------------------
 $scriptPayload = {
-$AppId = '${escapePS(appId)}'
-$checkApp = get-wingetpackage -Id "$AppId"
-if ($checkApp.Count -gt 0) {
-    $availableUpdate = @($checkApp | Where-Object { $_.IsUpdateAvailable })
-    # Match against the ID property of the objects
-    if ($availableUpdate.Count -gt 0) {
-        $packageObject = $availableUpdate[0]
-        $localID = $packageObject.Id
-        Write-Output "Update found for $localID. Update required"
-        exit 1
-    }
-    else {
-        Write-Output "$AppId is installed and up to date"
-        exit 0
+    $AppId = '${escapePS(appId)}'
+    $moduleName = "Microsoft.WinGet.Client"
+    Import-Module $moduleName -ErrorAction Stop
+
+    $checkApp = Get-WinGetPackage -Id $AppId -ErrorAction SilentlyContinue
+
+    if ($checkApp) {
+        $availableUpdate = @($checkApp | Where-Object { $_.IsUpdateAvailable })
+        if ($availableUpdate.Count -eq 0) {
+            Write-Output "Detected"
+            exit 0
+        }
     }
 
-}
-else {
-    Write-Output "$AppId is not installed"
     exit 1
-}
 }
 # ---------------------------------------------------------
 # PS7 CHECK AND EXECUTION ROUTING
@@ -252,22 +246,19 @@ else {
 if ($PSVersionTable.PSVersion.Major -lt 7) {
 
     $pwshPath = "C:\\Program Files\\PowerShell\\7\\pwsh.exe"
-    # Launch pwsh and pass the commands directly
-    Write-Host "Running in PS5.1. Launching commands in PowerShell 7..."
-    & $pwshPath -NoProfile -ExecutionPolicy Bypass -Command $scriptPayload
 
-    if ( $LASTEXITCODE -eq 1 ) {
-        Write-Output "Installation failed or update is required"
-        exit 1
+    if (Test-Path $pwshPath) {
+        $output = & $pwshPath -NoProfile -ExecutionPolicy Bypass -Command $scriptPayload
+
+        if ($LASTEXITCODE -eq 0) {
+            Write-Output "Detected"
+            exit 0
+        }
     }
-    else {
-        Write-Output "Application is installed and up to date"
-        exit 0
-    }
+
+    exit 1
 }
 else {
-    # We are already running in PS7 natively, so just run the payload!
-    Write-Host "Already running in PowerShell 7. Executing payload..."
     & $scriptPayload
 }
 '@
