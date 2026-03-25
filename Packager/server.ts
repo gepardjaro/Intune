@@ -290,7 +290,7 @@ else {
           else if (hasX86) archValue = 'x86';
           return `$archValue = '${archValue}'`;
         }
-        return `$archValue = 'x64'`;
+        return `$archValue = 'AllWithARM64'`;
       })()}
       $MinOSMap = @{
         "Windows 10 1607" = "W10_1607"
