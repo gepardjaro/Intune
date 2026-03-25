@@ -276,20 +276,21 @@ else {
       $DetectionRule = New-IntuneWin32AppDetectionRuleScript -ScriptFile $DetectionScriptPath -EnforceSignatureCheck $false -RunAs32Bit $false
       $AddParams.DetectionRule = $DetectionRule
 
-      # Add requirement rule with architecture
+      # Add requirement rule
       ${(() => {
         if (checkArchitecture && architectures && architectures.length > 0) {
           const hasX86 = architectures.includes('x86');
           const hasX64 = architectures.includes('x64');
           const hasARM64 = architectures.includes('ARM64');
-          if (hasARM64 && (hasX86 || hasX64)) return `$archValue = 'AllWithARM64'`;
-          if (hasX86 && hasX64) return `$archValue = 'x64x86'`;
-          if (hasARM64) return `$archValue = 'arm64'`;
-          if (hasX64) return `$archValue = 'x64'`;
-          if (hasX86) return `$archValue = 'x86'`;
-          return `$archValue = 'x64'`;
+          let archValue = 'x64';
+          if (hasARM64 && (hasX86 || hasX64)) archValue = 'AllWithARM64';
+          else if (hasX86 && hasX64) archValue = 'x64x86';
+          else if (hasARM64) archValue = 'arm64';
+          else if (hasX64) archValue = 'x64';
+          else if (hasX86) archValue = 'x86';
+          return `$archValue = '${archValue}'`;
         }
-        return `$archValue = 'x64'`;
+        return `$archValue = $null`;
       })()}
       $MinOSMap = @{
         "Windows 10 1607" = "W10_1607"
@@ -311,7 +312,11 @@ else {
       }
       $MappedMinOS = $MinOSMap['${escapePS(minOS || 'Windows 10 20H2')}']
       if (-not $MappedMinOS) { $MappedMinOS = "W10_20H2" }
-      $RequirementRule = New-IntuneWin32AppRequirementRule -Architecture $archValue -MinimumSupportedWindowsRelease $MappedMinOS
+      if ($archValue) {
+        $RequirementRule = New-IntuneWin32AppRequirementRule -Architecture $archValue -MinimumSupportedWindowsRelease $MappedMinOS
+      } else {
+        $RequirementRule = New-IntuneWin32AppRequirementRule -MinimumSupportedWindowsRelease $MappedMinOS
+      }
       $AddParams.RequirementRule = $RequirementRule
 
       # NOTE: The IntuneWin32App module currently has a bug where it passes the literal string path
