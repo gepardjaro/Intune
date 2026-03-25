@@ -290,7 +290,7 @@ else {
           else if (hasX86) archValue = 'x86';
           return `$archValue = '${archValue}'`;
         }
-        return `$archValue = $null`;
+        return `$archValue = 'x64'`;
       })()}
       $MinOSMap = @{
         "Windows 10 1607" = "W10_1607"
@@ -312,11 +312,7 @@ else {
       }
       $MappedMinOS = $MinOSMap['${escapePS(minOS || 'Windows 10 20H2')}']
       if (-not $MappedMinOS) { $MappedMinOS = "W10_20H2" }
-      if ($archValue) {
-        $RequirementRule = New-IntuneWin32AppRequirementRule -Architecture $archValue -MinimumSupportedWindowsRelease $MappedMinOS
-      } else {
-        $RequirementRule = New-IntuneWin32AppRequirementRule -MinimumSupportedWindowsRelease $MappedMinOS
-      }
+      $RequirementRule = New-IntuneWin32AppRequirementRule -Architecture $archValue -MinimumSupportedWindowsRelease $MappedMinOS
       $AddParams.RequirementRule = $RequirementRule
 
       # NOTE: The IntuneWin32App module currently has a bug where it passes the literal string path
