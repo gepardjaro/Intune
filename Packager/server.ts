@@ -873,15 +873,25 @@ async function startServer() {
         return;
       }
 
+      // Check for user-provided template first
+      const userTemplateDir = path.join(process.cwd(), "src_packager", "PSADT_User_Template");
+
       try {
         if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
 
-        console.log("Automatically downloading PSADT 4.1.8...");
-        await downloadFile(psadtUrl, zipPath);
+        if (fs.existsSync(userTemplateDir)) {
+          console.log("Found PSADT_User_Template, copying to PSADT...");
+          if (fs.existsSync(targetDir)) fs.rmSync(targetDir, { recursive: true });
+          fs.cpSync(userTemplateDir, targetDir, { recursive: true });
+          console.log("Copied PSADT_User_Template to PSADT.");
+        } else {
+          console.log("Automatically downloading PSADT 4.1.8...");
+          await downloadFile(psadtUrl, zipPath);
 
-        console.log("Extracting PSADT 4.1.8...");
-        const zip = new AdmZip(zipPath);
-        zip.extractAllTo(targetDir, true);
+          console.log("Extracting PSADT 4.1.8...");
+          const zip = new AdmZip(zipPath);
+          zip.extractAllTo(targetDir, true);
+        }
 
         if (fs.existsSync(markerFile)) {
           const psadtContent = fs.readFileSync(markerFile, "utf-8");
