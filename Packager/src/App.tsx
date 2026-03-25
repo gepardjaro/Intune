@@ -475,7 +475,15 @@ export default function App() {
 
   const reloadFromDisk = async () => {
     try {
-      const res = await fetch(`/api/psadt/reload?t=${Date.now()}`);
+      const params = new URLSearchParams({
+        t: String(Date.now()),
+        appId: state.package.packageId,
+        appName: state.package.name,
+        publisher: state.package.vendor,
+        version: state.package.version,
+        scriptAuthor: state.psadt.scriptAuthor
+      });
+      const res = await fetch(`/api/psadt/reload?${params}`);
       if (res.ok) {
         const data = await res.json();
         setState(prev => ({ ...prev, psadt: { ...prev.psadt, scriptContent: data.content } }));

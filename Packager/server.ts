@@ -956,11 +956,23 @@ async function startServer() {
   });
 
   // API: Reload .ps1 from disk (after external editing)
-  app.get("/api/psadt/reload", async (_req, res) => {
+  app.get("/api/psadt/reload", async (req, res) => {
     const templatePath = path.join(process.cwd(), "src_packager", "PSADT", "Invoke-AppDeployToolkit.ps1");
     try {
       if (fs.existsSync(templatePath)) {
-        const content = fs.readFileSync(templatePath, "utf-8");
+        let content = fs.readFileSync(templatePath, "utf-8");
+
+        // Replace placeholders with current app values so the user sees real data
+        const { appId, appName, publisher, version, scriptAuthor } = req.query;
+        const escapePs = (val: string) => (val || '').replace(/'/g, "''");
+        content = content
+          .replace(/__APPID__/g, escapePs(String(appId || '')))
+          .replace(/__APPNAME__/g, escapePs(String(appName || '')))
+          .replace(/__APPVENDOR__/g, escapePs(String(publisher || '')))
+          .replace(/__APPVERSION__/g, escapePs(String(version || '')))
+          .replace(/__APPSCRIPTDATE__/g, new Date().toISOString().split('T')[0])
+          .replace(/__APPSCRIPTAUTHOR__/g, escapePs(String(scriptAuthor || 'Automacanie')));
+
         res.json({ content });
       } else {
         res.status(404).json({ error: "Template file not found" });
