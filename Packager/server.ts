@@ -765,7 +765,7 @@ async function startServer() {
     if (-not (Get-Module -ListAvailable -Name $moduleName)) {
         Write-Host "'$moduleName' not found. Installing..."
         # Install the WinGet module securely and silently for All Users
-        Install-Module -Name $moduleName -Force -AcceptLicense -Scope AllUsers -AllowClobber
+        Install-Module -Name $moduleName -Force -Scope AllUsers -AllowClobber
         Write-Host "WinGet module installed successfully!"
     }
 
