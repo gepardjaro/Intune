@@ -741,7 +741,7 @@ async function startServer() {
         Import-Module $moduleName -ErrorAction Stop
         $AppId = '__APPID__'
         try {
-            Install-WinGetPackage -Id $AppId -ErrorAction Stop
+            Install-WinGetPackage -Id $AppId -Mode Silent -Force -Confirm -ErrorAction SilentlyContinue
             Write-Host "Successfully installed $AppId." -ForegroundColor Green
         }
         catch {
@@ -781,7 +781,7 @@ async function startServer() {
         Import-Module $moduleName -ErrorAction Stop
         $AppId = '__APPID__'
         try {
-            Uninstall-WinGetPackage -Id $AppId -ErrorAction Stop
+            Uninstall-WinGetPackage -Id $AppId -Force -Confirm -Mode Silent -ErrorAction Stop
             Write-Host "Successfully uninstalled $AppId." -ForegroundColor Green
         }
         catch {
