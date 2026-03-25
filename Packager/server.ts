@@ -126,13 +126,15 @@ async function importToIntune(params: {
   allowAvailableUninstall?: boolean;
   installBehavior?: string;
   deviceRestartBehavior?: string;
+  checkArchitecture?: boolean;
+  architectures?: string[];
   credentials: {
     clientId?: string;
     clientSecret?: string;
     tenantId?: string;
   };
 }) {
-  const { filePath, appName, appId, version, publisher, description, category, iconPath, installCommand, uninstallCommand, developer, owner, notes, informationUrl, privacyUrl, minOS, maxInstallationTime, allowAvailableUninstall, installBehavior, deviceRestartBehavior, credentials } = params;
+  const { filePath, appName, appId, version, publisher, description, category, iconPath, installCommand, uninstallCommand, developer, owner, notes, informationUrl, privacyUrl, minOS, maxInstallationTime, allowAvailableUninstall, installBehavior, deviceRestartBehavior, checkArchitecture, architectures, credentials } = params;
   
   // Azure AD Credentials from request or environment
   const clientId = credentials.clientId || process.env.INTUNE_CLIENT_ID;
@@ -218,7 +220,11 @@ async function importToIntune(params: {
       # Add a detection rule. Use a script if provided, otherwise default to explorer.exe existence.
       Write-Host "Adding detection rule..."
       $DetectionScript = @'
-$AppId = '${escapePS(appId)}' # Use exact winget Package identifier
+# ---------------------------------------------------------
+# DEFINE THE ACTUAL PAYLOAD (Independent of PS Version)
+# ---------------------------------------------------------
+$scriptPayload = {
+$AppId = '${escapePS(appId)}'
 $checkApp = get-wingetpackage -Id "$AppId"
 if ($checkApp.Count -gt 0) {
     $availableUpdate = @($checkApp | Where-Object { $_.IsUpdateAvailable })
@@ -233,18 +239,82 @@ if ($checkApp.Count -gt 0) {
         Write-Output "$AppId is installed and up to date"
         exit 0
     }
-    
+
 }
 else {
     Write-Output "$AppId is not installed"
     exit 1
+}
+}
+# ---------------------------------------------------------
+# PS7 CHECK AND EXECUTION ROUTING
+# ---------------------------------------------------------
+if ($PSVersionTable.PSVersion.Major -lt 7) {
+
+    $pwshPath = "C:\\Program Files\\PowerShell\\7\\pwsh.exe"
+    # Launch pwsh and pass the commands directly
+    Write-Host "Running in PS5.1. Launching commands in PowerShell 7..."
+    & $pwshPath -NoProfile -ExecutionPolicy Bypass -Command $scriptPayload
+
+    if ( $LASTEXITCODE -eq 1 ) {
+        Write-Output "Installation failed or update is required"
+        exit 1
+    }
+    else {
+        Write-Output "Application is installed and up to date"
+        exit 0
+    }
+}
+else {
+    # We are already running in PS7 natively, so just run the payload!
+    Write-Host "Already running in PowerShell 7. Executing payload..."
+    & $scriptPayload
 }
 '@
       $DetectionScriptPath = Join-Path $env:TEMP "DetectionScript_$([Guid]::NewGuid()).ps1"
       $DetectionScript | Out-File -FilePath $DetectionScriptPath -Encoding UTF8
       $DetectionRule = New-IntuneWin32AppDetectionRuleScript -ScriptFile $DetectionScriptPath -EnforceSignatureCheck $false -RunAs32Bit $false
       $AddParams.DetectionRule = $DetectionRule
-      
+
+      # Add requirement rule
+      ${(() => {
+        if (checkArchitecture && architectures && architectures.length > 0) {
+          const hasX86 = architectures.includes('x86');
+          const hasX64 = architectures.includes('x64');
+          const hasARM64 = architectures.includes('ARM64');
+          let archValue = 'x64';
+          if (hasARM64 && (hasX86 || hasX64)) archValue = 'AllWithARM64';
+          else if (hasX86 && hasX64) archValue = 'x64x86';
+          else if (hasARM64) archValue = 'arm64';
+          else if (hasX64) archValue = 'x64';
+          else if (hasX86) archValue = 'x86';
+          return `$archValue = '${archValue}'`;
+        }
+        return `$archValue = 'AllWithARM64'`;
+      })()}
+      $MinOSMap = @{
+        "Windows 10 1607" = "W10_1607"
+        "Windows 10 1703" = "W10_1703"
+        "Windows 10 1709" = "W10_1709"
+        "Windows 10 1803" = "W10_1803"
+        "Windows 10 1809" = "W10_1809"
+        "Windows 10 1903" = "W10_1903"
+        "Windows 10 1909" = "W10_1909"
+        "Windows 10 2004" = "W10_2004"
+        "Windows 10 20H2" = "W10_20H2"
+        "Windows 10 21H1" = "W10_21H1"
+        "Windows 10 21H2" = "W10_21H2"
+        "Windows 10 22H2" = "W10_22H2"
+        "Windows 11 21H2" = "W11_21H2"
+        "Windows 11 22H2" = "W11_22H2"
+        "Windows 11 23H2" = "W11_23H2"
+        "Windows 11 24H2" = "W11_24H2"
+      }
+      $MappedMinOS = $MinOSMap['${escapePS(minOS || 'Windows 10 20H2')}']
+      if (-not $MappedMinOS) { $MappedMinOS = "W10_20H2" }
+      $RequirementRule = New-IntuneWin32AppRequirementRule -Architecture $archValue -MinimumSupportedWindowsRelease $MappedMinOS
+      $AddParams.RequirementRule = $RequirementRule
+
       # NOTE: The IntuneWin32App module currently has a bug where it passes the literal string path
       # to the Graph API instead of converting it to a base64 Edm.Binary string, causing a ModelValidationFailure.
       # We are temporarily disabling the icon upload to ensure the app imports successfully.
@@ -387,17 +457,7 @@ else {
               if ($catRes.value.Count -gt 0) {
                   $catId = $catRes.value[0].id
               } else {
-                  Write-Host "Category '$catName' not found. Creating it..."
-                  $newCatPayload = @{
-                      "@odata.type" = "#microsoft.graph.mobileAppCategory"
-                      displayName = $catName
-                  } | ConvertTo-Json -Depth 10
-                  try {
-                      $newCatRes = Invoke-RestMethod -Uri "https://graph.microsoft.com/beta/deviceAppManagement/mobileAppCategories" -Method POST -Headers @{Authorization = $authToken; "Content-Type" = "application/json"} -Body $newCatPayload
-                      $catId = $newCatRes.id
-                  } catch {
-                      Write-Host "Failed to create category: $_"
-                  }
+                  Write-Host "Category '$catName' not found in tenant. Skipping assignment."
               }
 
               if ($catId) {
@@ -451,16 +511,58 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  app.use(express.json());
+  app.use(express.json({ limit: '10mb' }));
   const localIconsDir = path.join(process.cwd(), "src_packager", "icons", "icons-main", "icons");
   app.use("/icons", express.static(localIconsDir));
 
   // API: Get Server Info
   app.get("/api/info", (req, res) => {
-    res.json({ 
+    res.json({
       platform: process.platform,
       hasApiKey: !!process.env.GEMINI_API_KEY
     });
+  });
+
+  // API: Load saved credentials from .env
+  app.get("/api/credentials", (req, res) => {
+    const envPath = path.join(process.cwd(), ".env");
+    const creds: Record<string, string> = {};
+    if (fs.existsSync(envPath)) {
+      const lines = fs.readFileSync(envPath, "utf-8").split('\n');
+      for (const line of lines) {
+        const match = line.match(/^([A-Z_]+)="?([^"]*)"?$/);
+        if (match) creds[match[1]] = match[2];
+      }
+    }
+    res.json({
+      tenantId: creds.INTUNE_TENANT_ID || '',
+      clientId: creds.INTUNE_CLIENT_ID || '',
+      clientSecret: creds.INTUNE_CLIENT_SECRET || '',
+      geminiApiKey: creds.GEMINI_API_KEY || ''
+    });
+  });
+
+  // API: Save credentials to .env
+  app.post("/api/credentials/save", (req, res) => {
+    const { tenantId, clientId, clientSecret, geminiApiKey } = req.body;
+    const envPath = path.join(process.cwd(), ".env");
+    const envContent = [
+      `GEMINI_API_KEY="${geminiApiKey || ''}"`,
+      `INTUNE_TENANT_ID="${tenantId || ''}"`,
+      `INTUNE_CLIENT_ID="${clientId || ''}"`,
+      `INTUNE_CLIENT_SECRET="${clientSecret || ''}"`,
+    ].join('\n') + '\n';
+    try {
+      fs.writeFileSync(envPath, envContent, "utf-8");
+      // Update process.env so changes take effect immediately
+      if (geminiApiKey) process.env.GEMINI_API_KEY = geminiApiKey;
+      if (tenantId) process.env.INTUNE_TENANT_ID = tenantId;
+      if (clientId) process.env.INTUNE_CLIENT_ID = clientId;
+      if (clientSecret) process.env.INTUNE_CLIENT_SECRET = clientSecret;
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
   });
 
   // API: Search Apps using Find-WinGetPackage or winget.exe
@@ -478,41 +580,71 @@ async function startServer() {
 
       if (isWindows) {
         try {
-          // Direct winget search is usually faster and more reliable on standard Windows
-          // Added --accept-source-agreements to avoid interactive prompts
+          // Run winget through PowerShell to get clean output (no VT escape codes)
           console.log(`Executing direct winget search for: ${query}`);
-          // Try with --source winget first
+          const escapedQuery = query.replace(/'/g, "''");
           let wingetResult;
           try {
-            wingetResult = await execAsync(`winget search "${query}" --source winget --accept-source-agreements`);
+            wingetResult = await execAsync(
+              `powershell.exe -NoProfile -Command "winget search '${escapedQuery}' --accept-source-agreements 2>$null | Out-String -Width 500"`
+            );
           } catch (e) {
-            console.warn("Winget search with --source winget failed, trying without source...");
+            console.warn("Winget search via powershell failed, trying cmd...");
             wingetResult = await execAsync(`winget search "${query}" --accept-source-agreements`);
           }
-          
+
           const stdout = wingetResult.stdout;
           console.log(`Winget search output for "${query}":`, stdout);
           const lines = stdout.split('\n').filter(l => l.trim() !== "");
           
           if (lines.length > 0) {
-            // Find the index of the header line (contains "Name" and "Id")
-            const headerIndex = lines.findIndex(l => l.includes("Name") && l.includes("Id"));
-            if (headerIndex !== -1 && lines.length > headerIndex + 1) {
-              // The line after header is usually the separator line (---)
-              const dataLines = lines.slice(headerIndex + 2);
-              results = dataLines.map(line => {
-                // winget output uses fixed width columns usually, but let's try splitting by multiple spaces
-                const parts = line.split(/\s{2,}/);
-                if (parts.length >= 3) {
-                  return {
-                    Name: parts[0].trim(),
-                    Id: parts[1].trim(),
-                    Version: parts[2].trim(),
-                    Source: 'winget'
-                  };
-                }
-                return null;
-              }).filter(Boolean);
+            // Find the separator line (------) which always comes after the header
+            const sepIndex = lines.findIndex(l => /^[-\s]+$/.test(l.trim()) && l.includes('---'));
+            if (sepIndex > 0 && lines.length > sepIndex + 1) {
+              const headerLine = lines[sepIndex - 1];
+              console.log(`Header line: "${headerLine}"`);
+
+              // Try column-position parsing using the header
+              const idMatch = headerLine.match(/\bId\b/);
+              const versionMatch = headerLine.match(/\bVersion\b/);
+              const sourceMatch = headerLine.match(/\bSource\b/);
+
+              const idCol = idMatch ? idMatch.index! : -1;
+              const versionCol = versionMatch ? versionMatch.index! : -1;
+              const sourceCol = sourceMatch ? sourceMatch.index! : -1;
+
+              const dataLines = lines.slice(sepIndex + 1);
+              console.log(`Parsing ${dataLines.length} data lines, idCol=${idCol}, versionCol=${versionCol}, sourceCol=${sourceCol}`);
+
+              if (idCol > 0 && versionCol > 0) {
+                // Fixed-width column parsing
+                results = dataLines.map(line => {
+                  if (line.length < versionCol) return null;
+                  const name = line.substring(0, idCol).trim();
+                  const id = line.substring(idCol, versionCol).trim();
+                  const version = sourceCol > 0
+                    ? line.substring(versionCol, sourceCol).trim().split(/\s+/)[0]
+                    : line.substring(versionCol).trim().split(/\s+/)[0];
+                  const source = sourceCol > 0 && line.length > sourceCol
+                    ? line.substring(sourceCol).trim() : 'winget';
+                  if (!name || !id) return null;
+                  return { Name: name, Id: id, Version: version || "Unknown", Source: source || 'winget' };
+                }).filter(Boolean);
+              } else {
+                // Fallback: split by 2+ whitespace
+                results = dataLines.map(line => {
+                  const parts = line.split(/\s{2,}/);
+                  if (parts.length >= 3) {
+                    return {
+                      Name: parts[0].trim(),
+                      Id: parts[1].trim(),
+                      Version: parts[2].trim(),
+                      Source: parts.length >= 4 ? parts[parts.length - 1].trim() : 'winget'
+                    };
+                  }
+                  return null;
+                }).filter(Boolean);
+              }
               console.log(`Found ${results.length} results via direct winget search`);
             }
           }
@@ -564,13 +696,16 @@ async function startServer() {
         const id = app.Id || "unknown";
         // Derive moniker from ID (e.g. Google.Chrome -> chrome)
         const moniker = id.split('.').pop()?.toLowerCase() || "unknown";
-        
+        // Derive publisher from ID (e.g. Microsoft.PowerToys -> Microsoft)
+        const publisher = id.includes('.') ? id.split('.')[0] : (app.Name || "Unknown").split(' ')[0];
+
         return {
           name: app.Name || "Unknown",
           id: id,
           version: app.Version || "0.0.0",
           moniker: moniker,
-          source: 'winget'
+          publisher: publisher,
+          source: app.Source || 'winget'
         };
       });
 
@@ -592,32 +727,35 @@ async function startServer() {
     result = result.replace(/AppScriptDate = '[^']*'/, "AppScriptDate = '__APPSCRIPTDATE__'");
     result = result.replace(/AppScriptAuthor = '[^']*'/, "AppScriptAuthor = '__APPSCRIPTAUTHOR__'");
 
-    // Inject Pre-Installation tasks (NuGet, PS7, WinGet module)
-    if (result.includes("    ## <Perform Pre-Installation tasks here>")) {
+    // Inject Pre-Installation tasks (NuGet, PS7, WinGet module) — only if not already injected
+    if (result.includes("    ## <Perform Pre-Installation tasks here>") && !result.includes("Install-PackageProvider -Name NuGet")) {
       const preInstallTasks = `    ## <Perform Pre-Installation tasks here>
     if (-not (Get-PackageProvider -Name NuGet -ListAvailable -ErrorAction Ignore)) {
         Write-Host "Installing NuGet provider..."
         Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope AllUsers | Out-Null
     }
 
-    $pwshPath = "$env:ProgramFiles\\PowerShell\\7\\pwsh.exe"
+    $pwshPath = "$env:ProgramW6432\\PowerShell\\7\\pwsh.exe"
     # 1. Check if PowerShell 7 is installed machine-wide
     if (-not (Test-Path $pwshPath)) {
         Write-Host "PowerShell 7 not found. Installing silently for SYSTEM (Machine-wide)..."
-
-        # 2. Execute Microsoft's MSI install (Requires Admin/SYSTEM)
-        Invoke-Expression "& { $(Invoke-RestMethod https://aka.ms/install-powershell.ps1) } -UseMSI -Quiet"
-
-        # 3. Wait for the background MSI to finish
-        $timeout = 120
-        $timer = 0
-        while (-not (Test-Path $pwshPath) -and ($timer -lt $timeout)) {
-            Start-Sleep -Seconds 5
-            $timer += 5
+        $JBNWingetAppID = "Microsoft.Powershell"
+        #Help SYSTEM find winget.exe folder
+        Set-Location -Path ("$env:ProgramW6432\\WindowsApps\\Microsoft.DesktopAppInstaller_*_x64__8wekyb3d8bbwe")
+        #Update software with winget.exe
+        .\\winget.exe install --id $JBNWingetAppID --silent --accept-package-agreements --accept-source-agreements
+        $code = $LASTEXITCODE
+        Write-Output "winget exit code: $code"
+        # 0 = success, -1978335189 = already installed (0x8A150019)
+        if ($code -ne 0 -and $code -ne -1978335189) {
+            if (-not (Test-Path $pwshPath)) {
+                Write-Error "PowerShell 7 installation failed with exit code $code."
+                exit $code
+            }
+            Write-Host "winget returned $code but PS7 exists at $pwshPath, continuing..."
         }
-
         if (-not (Test-Path $pwshPath)) {
-            Write-Error "PowerShell 7 installation failed or timed out. Cannot continue."
+            Write-Error "PowerShell 7 installation failed. pwsh.exe not found."
             exit 1
         }
         Write-Host "PowerShell 7 installed successfully!"
@@ -635,8 +773,8 @@ async function startServer() {
       result = result.replace("    ## <Perform Pre-Installation tasks here>", preInstallTasks);
     }
 
-    // Inject Installation tasks with __APPID__ placeholder
-    if (result.includes("    ## <Perform Installation tasks here>")) {
+    // Inject Installation tasks — only if not already injected
+    if (result.includes("    ## <Perform Installation tasks here>") && !result.includes("Install-WinGetPackage")) {
       const installTasks = `    ## <Perform Installation tasks here>
     # ---------------------------------------------------------
     # DEFINE THE ACTUAL PAYLOAD (Independent of PS Version)
@@ -646,7 +784,7 @@ async function startServer() {
         Import-Module $moduleName -ErrorAction Stop
         $AppId = '__APPID__'
         try {
-            Install-WinGetPackage -Id $AppId -ErrorAction Stop
+            Install-WinGetPackage -Id $AppId -Mode Silent -Force -Confirm -ErrorAction SilentlyContinue
             Write-Host "Successfully installed $AppId." -ForegroundColor Green
         }
         catch {
@@ -657,7 +795,7 @@ async function startServer() {
     # PS7 CHECK AND EXECUTION ROUTING
     # ---------------------------------------------------------
     if ($PSVersionTable.PSVersion.Major -lt 7) {
-        $pwshPath = "C:\\Program Files\\PowerShell\\7\\pwsh.exe"
+        $pwshPath = "$env:ProgramW6432\\PowerShell\\7\\pwsh.exe"
         Write-Host "Running in PS5.1. Launching commands in PowerShell 7..."
         & $pwshPath -NoProfile -ExecutionPolicy Bypass -Command $scriptPayload
         if ( $LASTEXITCODE -eq 1 ) {
@@ -675,8 +813,8 @@ async function startServer() {
       result = result.replace("    ## <Perform Installation tasks here>", installTasks);
     }
 
-    // Inject Uninstallation tasks with __APPID__ placeholder
-    if (result.includes("    ## <Perform Uninstallation tasks here>")) {
+    // Inject Uninstallation tasks — only if not already injected
+    if (result.includes("    ## <Perform Uninstallation tasks here>") && !result.includes("Uninstall-WinGetPackage")) {
       const uninstallTasks = `    ## <Perform Uninstallation tasks here>
     # ---------------------------------------------------------
     # DEFINE THE ACTUAL PAYLOAD (Independent of PS Version)
@@ -686,7 +824,7 @@ async function startServer() {
         Import-Module $moduleName -ErrorAction Stop
         $AppId = '__APPID__'
         try {
-            Uninstall-WinGetPackage -Id $AppId -ErrorAction Stop
+            Uninstall-WinGetPackage -Id $AppId -Force -Confirm -Mode Silent -ErrorAction Stop
             Write-Host "Successfully uninstalled $AppId." -ForegroundColor Green
         }
         catch {
@@ -697,7 +835,7 @@ async function startServer() {
     # PS7 CHECK AND EXECUTION ROUTING
     # ---------------------------------------------------------
     if ($PSVersionTable.PSVersion.Major -lt 7) {
-        $pwshPath = "C:\\Program Files\\PowerShell\\7\\pwsh.exe"
+        $pwshPath = "$env:ProgramW6432\\PowerShell\\7\\pwsh.exe"
         Write-Host "Running in PS5.1. Launching commands in PowerShell 7..."
         & $pwshPath -NoProfile -ExecutionPolicy Bypass -Command $scriptPayload
         if ( $LASTEXITCODE -eq 1 ) {
@@ -735,15 +873,25 @@ async function startServer() {
         return;
       }
 
+      // Check for user-provided template first
+      const userTemplateDir = path.join(process.cwd(), "src_packager", "PSADT_User_Template");
+
       try {
         if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
 
-        console.log("Automatically downloading PSADT 4.1.8...");
-        await downloadFile(psadtUrl, zipPath);
+        if (fs.existsSync(userTemplateDir)) {
+          console.log("Found PSADT_User_Template, copying to PSADT...");
+          if (fs.existsSync(targetDir)) fs.rmSync(targetDir, { recursive: true });
+          fs.cpSync(userTemplateDir, targetDir, { recursive: true });
+          console.log("Copied PSADT_User_Template to PSADT.");
+        } else {
+          console.log("Automatically downloading PSADT 4.1.8...");
+          await downloadFile(psadtUrl, zipPath);
 
-        console.log("Extracting PSADT 4.1.8...");
-        const zip = new AdmZip(zipPath);
-        zip.extractAllTo(targetDir, true);
+          console.log("Extracting PSADT 4.1.8...");
+          const zip = new AdmZip(zipPath);
+          zip.extractAllTo(targetDir, true);
+        }
 
         if (fs.existsSync(markerFile)) {
           const psadtContent = fs.readFileSync(markerFile, "utf-8");
@@ -822,6 +970,63 @@ async function startServer() {
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to save template" });
+    }
+  });
+
+  // API: Open .ps1 in external editor
+  app.post("/api/psadt/open-editor", async (req, res) => {
+    const { editor, content } = req.body;
+    const templatePath = path.join(process.cwd(), "src_packager", "PSADT", "Invoke-AppDeployToolkit.ps1");
+    try {
+      // Save current content before opening
+      if (content) {
+        fs.writeFileSync(templatePath, content, "utf-8");
+      }
+      const editors: Record<string, string> = {
+        'vscode': `code "${templatePath}"`,
+        'antigravity': `antigravity "${templatePath}"`,
+        'ise': `powershell_ise.exe -File "${templatePath}"`
+      };
+      const cmd = editors[editor];
+      if (!cmd) {
+        return res.status(400).json({ error: "Unknown editor" });
+      }
+      exec(cmd, (error) => {
+        if (error) {
+          console.error(`Failed to open editor: ${error.message}`);
+          return res.status(500).json({ error: `Failed to open ${editor}: ${error.message}` });
+        }
+        res.json({ success: true });
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // API: Reload .ps1 from disk (after external editing)
+  app.get("/api/psadt/reload", async (req, res) => {
+    const templatePath = path.join(process.cwd(), "src_packager", "PSADT", "Invoke-AppDeployToolkit.ps1");
+    try {
+      if (fs.existsSync(templatePath)) {
+        let content = fs.readFileSync(templatePath, "utf-8");
+
+        // Replace placeholders with current app values so the user sees real data
+        const { appId, appName, publisher, version, scriptAuthor } = req.query;
+        const escapePs = (val: string) => (val || '').replace(/'/g, "''");
+        content = content
+          .replace(/__APPID__/g, escapePs(String(appId || '')))
+          .replace(/__APPNAME__/g, escapePs(String(appName || '')))
+          .replace(/__APPVENDOR__/g, escapePs(String(publisher || '')))
+          .replace(/__APPVERSION__/g, escapePs(String(version || '')))
+          .replace(/__APPSCRIPTDATE__/g, new Date().toISOString().split('T')[0])
+          .replace(/__APPSCRIPTAUTHOR__/g, escapePs(String(scriptAuthor || 'Automacanie')));
+
+        res.json({ content });
+      } else {
+        res.status(404).json({ error: "Template file not found" });
+      }
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
     }
   });
 
@@ -917,32 +1122,125 @@ async function startServer() {
     }
   });
 
+  // API: Fetch Intune app categories from tenant
+  app.post("/api/intune/categories", async (req, res) => {
+    const { azure } = req.body;
+    if (!azure?.tenantId || !azure?.clientId || !azure?.clientSecret) {
+      return res.status(400).json({ error: "Azure credentials are required." });
+    }
+
+    const psScript = `
+$ErrorActionPreference = 'Stop'
+if (-not (Get-Module -ListAvailable -Name IntuneWin32App)) {
+    Install-Module -Name IntuneWin32App -Force -Scope CurrentUser -AllowClobber
+}
+if (-not (Get-Module -Name IntuneWin32App)) {
+    Import-Module IntuneWin32App
+}
+
+$TID = $env:IMPORT_TENANT_ID
+$CID = $env:IMPORT_CLIENT_ID
+$Secret = $env:IMPORT_CLIENT_SECRET
+
+try {
+    $global:graphAuth = Connect-MSIntuneGraph -TenantID $TID -ClientID $CID -ClientSecret $Secret -ErrorAction Stop
+} catch {
+    $SecureSecret = ConvertTo-SecureString $Secret -AsPlainText -Force
+    $global:graphAuth = Connect-MSIntuneGraph -TenantID $TID -ClientID $CID -ClientSecret $SecureSecret -ErrorAction Stop
+}
+
+$authToken = $global:graphAuth.Authorization
+if (-not $authToken) {
+    if ($global:authToken) { $authToken = $global:authToken }
+    elseif ($global:MSGraphToken) { $authToken = $global:MSGraphToken }
+}
+
+$catRes = Invoke-RestMethod -Uri "https://graph.microsoft.com/beta/deviceAppManagement/mobileAppCategories" -Method GET -Headers @{Authorization = $authToken}
+$catRes.value | Select-Object id, displayName | ConvertTo-Json -Compress
+`;
+
+    const scriptPath = path.join(process.cwd(), "temp_categories.ps1");
+    fs.writeFileSync(scriptPath, psScript, "utf-8");
+
+    try {
+      const result = await execAsync(`pwsh -File "${scriptPath}"`, {
+        env: {
+          ...process.env,
+          IMPORT_TENANT_ID: azure.tenantId,
+          IMPORT_CLIENT_ID: azure.clientId,
+          IMPORT_CLIENT_SECRET: azure.clientSecret
+        }
+      });
+      const categories = JSON.parse(result.stdout.trim() || '[]');
+      res.json(Array.isArray(categories) ? categories : [categories]);
+    } catch (error: any) {
+      console.error("Failed to fetch categories:", error.message);
+      res.status(500).json({ error: error.message });
+    } finally {
+      if (fs.existsSync(scriptPath)) fs.unlinkSync(scriptPath);
+    }
+  });
+
   // API: Full Import to Intune (Real backend call using IntuneWin32App module)
   app.post("/api/intune/import", async (req, res) => {
-    const { appName, appId, version, publisher, category, description, iconUrl, azure, installCommand, uninstallCommand, developer, owner, notes, informationUrl, privacyUrl, minOS, maxInstallationTime, allowAvailableUninstall, installBehavior, deviceRestartBehavior } = req.body;
+    const { appName, appId, version, publisher, category, description, iconUrl, azure, installCommand, uninstallCommand, developer, owner, notes, informationUrl, privacyUrl, minOS, maxInstallationTime, allowAvailableUninstall, installBehavior, deviceRestartBehavior, showWelcome = true, showProgress = true, checkArchitecture = false, architectures = [], scriptAuthor = '', scriptContent = '' } = req.body;
     
     try {
       console.log(`Starting Intune import for ${appName} v${version}...`);
+      console.log(`Script content received: ${scriptContent ? `${scriptContent.length} chars` : 'NONE (will rebuild from template)'}`);
 
-      // 1. Replace all placeholders in PSADT template with actual app data
+      // 1. Write the user's edited script content to the PSADT template
       const templatePath = path.join(process.cwd(), "src_packager", "PSADT", "Invoke-AppDeployToolkit.ps1");
       if (!fs.existsSync(templatePath)) {
         throw new Error("PSADT template not found. Please run Setup PSADT first.");
       }
 
       const escapePs = (val: string) => (val || '').replace(/'/g, "''");
-      const rawTemplate = fs.readFileSync(templatePath, "utf-8");
-      // Ensure scripts are injected (safety net for manually replaced templates)
-      const originalTemplate = injectPsadtScripts(rawTemplate);
-      const modifiedTemplate = originalTemplate
-        .replace(/__APPID__/g, escapePs(appId))
-        .replace(/__APPNAME__/g, escapePs(appName))
-        .replace(/__APPVENDOR__/g, escapePs(publisher))
-        .replace(/__APPVERSION__/g, escapePs(version))
-        .replace(/__APPSCRIPTDATE__/g, new Date().toISOString().split('T')[0])
-        .replace(/__APPSCRIPTAUTHOR__/g, escapePs(developer || owner || 'Automacanie'));
-      fs.writeFileSync(templatePath, modifiedTemplate, "utf-8");
+      // Save the original template so we can restore it after wrapping
+      const originalTemplateOnDisk = fs.readFileSync(templatePath, "utf-8");
+      let finalTemplate: string;
+      if (scriptContent) {
+        // Use the user's edited script directly — all manual changes are preserved
+        // Replace the default script author with the user's configured value
+        finalTemplate = scriptContent;
+        if (scriptAuthor) {
+          finalTemplate = finalTemplate.replace(/AppScriptAuthor = '[^']*'/, `AppScriptAuthor = '${escapePs(scriptAuthor)}'`);
+        }
+      } else {
+        // Fallback: rebuild from template on disk (legacy behavior)
+        const rawTemplate = fs.readFileSync(templatePath, "utf-8");
+        const originalTemplate = injectPsadtScripts(rawTemplate);
+        finalTemplate = originalTemplate
+          .replace(/__APPID__/g, escapePs(appId))
+          .replace(/__APPNAME__/g, escapePs(appName))
+          .replace(/__APPVENDOR__/g, escapePs(publisher))
+          .replace(/__APPVERSION__/g, escapePs(version))
+          .replace(/__APPSCRIPTDATE__/g, new Date().toISOString().split('T')[0])
+          .replace(/__APPSCRIPTAUTHOR__/g, escapePs(scriptAuthor || 'Automacanie'));
+
+        if (!showWelcome) {
+          finalTemplate = finalTemplate.replace(/^(\s*)Show-ADTInstallationWelcome\b/gm, '$1#Show-ADTInstallationWelcome');
+        }
+        if (!showProgress) {
+          finalTemplate = finalTemplate.replace(/^(\s*)Show-ADTInstallationProgress\b/gm, '$1#Show-ADTInstallationProgress');
+        }
+      }
+      fs.writeFileSync(templatePath, finalTemplate, "utf-8");
       console.log(`Replaced all placeholders with app data for '${appName}' in PSADT template.`);
+
+      // Copy PSADT folder to PSADT_<appId> as a backup before wrapping
+      const psadtFolder = path.join(process.cwd(), "src_packager", "PSADT");
+      const safeAppId = (appId || 'unknown').replace(/[^a-zA-Z0-9._-]/g, '_');
+      const backupFolder = path.join(process.cwd(), "src_packager", `PSADT_${safeAppId}`);
+      try {
+        if (fs.existsSync(backupFolder)) {
+          fs.rmSync(backupFolder, { recursive: true });
+        }
+        fs.cpSync(psadtFolder, backupFolder, { recursive: true });
+        console.log(`Copied PSADT folder to ${backupFolder}`);
+      } catch (copyErr: any) {
+        console.warn(`Failed to copy PSADT folder: ${copyErr.message}`);
+      }
 
       // 2. Run actual wrapping, then restore original template (with __APPID__ placeholder)
       let wrapResult;
@@ -951,7 +1249,7 @@ async function startServer() {
         console.log("Wrapping successful for import process.");
       } finally {
         // Always restore the original template, even on failure
-        fs.writeFileSync(templatePath, originalTemplate, "utf-8");
+        fs.writeFileSync(templatePath, originalTemplateOnDisk, "utf-8");
         console.log("Restored original PSADT template after wrapping.");
       }
 
@@ -988,6 +1286,8 @@ async function startServer() {
         allowAvailableUninstall,
         installBehavior,
         deviceRestartBehavior,
+        checkArchitecture,
+        architectures,
         credentials: azure || {}
       });
 
@@ -1035,7 +1335,7 @@ async function startServer() {
         let injectedContent = injectPsadtScripts(rawContent);
 
         // Replace placeholders with actual app data if provided via query params
-        const { appId, appName, publisher, version, developer, owner } = req.query;
+        const { appId, appName, publisher, version, scriptAuthor: qScriptAuthor } = req.query;
         if (appId || appName || publisher || version) {
           const escapePs = (val: string) => (val || '').replace(/'/g, "''");
           injectedContent = injectedContent
@@ -1044,7 +1344,7 @@ async function startServer() {
             .replace(/__APPVENDOR__/g, escapePs(String(publisher || '')))
             .replace(/__APPVERSION__/g, escapePs(String(version || '')))
             .replace(/__APPSCRIPTDATE__/g, new Date().toISOString().split('T')[0])
-            .replace(/__APPSCRIPTAUTHOR__/g, escapePs(String(developer || owner || 'Automacanie')));
+            .replace(/__APPSCRIPTAUTHOR__/g, escapePs(String(qScriptAuthor || 'Automacanie')));
         }
 
         res.json({ content: injectedContent });

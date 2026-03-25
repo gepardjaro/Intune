@@ -20,6 +20,19 @@ export interface PSADTSettings {
   installMode: 'Interactive' | 'Silent' | 'NonInteractive' | 'Auto';
   uninstallMode: 'Interactive' | 'Silent' | 'NonInteractive' | 'Auto';
   scriptContent: string;
+  appVendor: string;
+  appName: string;
+  appVersion: string;
+  appArch: string;
+  appLang: string;
+  appRevision: string;
+  appProcessesToClose: string;
+  appScriptVersion: string;
+  appScriptDate: string;
+  appScriptAuthor: string;
+  requireAdmin: boolean;
+  showWelcome: boolean;
+  showProgress: boolean;
 }
 
 export interface IntuneSettings {
@@ -39,6 +52,8 @@ export interface IntuneSettings {
   minOS: string;
   maxInstallationTime: number;
   allowAvailableUninstall: boolean;
+  checkArchitecture: boolean;
+  architectures: ('x86' | 'x64' | 'ARM64')[];
 }
 
 export interface AppState {
@@ -52,10 +67,23 @@ export interface AppState {
 export const INITIAL_STATE: AppState = {
   azure: { tenantId: '', clientId: '', clientSecret: '' },
   package: { name: '', vendor: '', version: '', author: '', description: 'FILL THE DESCRIPTION', packageId: '', moniker: '' },
-  psadt: { 
-    installMode: 'Silent', 
+  psadt: {
+    installMode: 'Silent',
     uninstallMode: 'Silent',
-    scriptContent: ''
+    scriptContent: '',
+    appVendor: '',
+    appName: '',
+    appVersion: '',
+    appArch: '',
+    appLang: '',
+    appRevision: '',
+    appProcessesToClose: '',
+    appScriptVersion: '1.0.0',
+    appScriptDate: new Date().toISOString().split('T')[0],
+    appScriptAuthor: '',
+    requireAdmin: true,
+    showWelcome: true,
+    showProgress: true
   },
   intune: { 
     publisher: '', 
@@ -73,7 +101,9 @@ export const INITIAL_STATE: AppState = {
     rebootBehavior: 'DetermineByReturnCode',
     minOS: 'Windows 10 20H2',
     maxInstallationTime: 60,
-    allowAvailableUninstall: false
+    allowAvailableUninstall: false,
+    checkArchitecture: false,
+    architectures: []
   },
   step: 0
 };

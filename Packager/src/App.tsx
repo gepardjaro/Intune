@@ -12,6 +12,7 @@ import {
   ShieldCheck,
   Download,
   RotateCcw,
+  ExternalLink,
   Sparkles,
   Info,
   RefreshCw,
@@ -22,7 +23,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { INITIAL_STATE, type AppState, type PackageDetails } from './types';
-import { searchWingetApp, modifyPsadtScript } from './services/geminiService';
+import { searchWingetApp, modifyPsadtScript, setGeminiApiKey } from './services/geminiService';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -34,13 +35,14 @@ export default function App() {
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchType, setSearchType] = useState<'Name' | 'Id' | 'Moniker' | 'AI'>('Name');
   const [aiRequest, setAiRequest] = useState('');
   const [isModifying, setIsModifying] = useState(false);
   const [history, setHistory] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [serverPlatform, setServerPlatform] = useState<string | null>(null);
   const [hasApiKey, setHasApiKey] = useState(false);
+  const [geminiApiKey, setGeminiApiKeyState] = useState('');
+  const [isSavingCreds, setIsSavingCreds] = useState(false);
 
   useEffect(() => {
     const initApp = async () => {
@@ -51,14 +53,32 @@ export default function App() {
           const infoData = await infoRes.json();
           setServerPlatform(infoData.platform);
           setHasApiKey(infoData.hasApiKey);
-          if (!infoData.hasApiKey && searchType === 'AI') {
-            setSearchType('Name');
+        }
+
+        // Load saved credentials from .env
+        const credsRes = await fetch('/api/credentials');
+        if (credsRes.ok) {
+          const creds = await credsRes.json();
+          if (creds.tenantId || creds.clientId || creds.clientSecret) {
+            setState(prev => ({
+              ...prev,
+              azure: {
+                tenantId: creds.tenantId || prev.azure.tenantId,
+                clientId: creds.clientId || prev.azure.clientId,
+                clientSecret: creds.clientSecret || prev.azure.clientSecret
+              }
+            }));
+          }
+          if (creds.geminiApiKey) {
+            setGeminiApiKeyState(creds.geminiApiKey);
+            setGeminiApiKey(creds.geminiApiKey);
+            setHasApiKey(true);
           }
         }
 
         // Trigger automatic setup on backend
         await fetch('/api/psadt/setup', { method: 'POST' });
-        
+
         // Fetch template
         const response = await fetch('/api/psadt/template');
         if (response.ok) {
@@ -76,41 +96,126 @@ export default function App() {
     initApp();
   }, []);
 
+  const handleGeminiKeyChange = (key: string) => {
+    setGeminiApiKeyState(key);
+    setGeminiApiKey(key);
+    setHasApiKey(!!key);
+  };
+
+  const saveCredentials = async () => {
+    setIsSavingCreds(true);
+    try {
+      const res = await fetch('/api/credentials/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tenantId: state.azure.tenantId,
+          clientId: state.azure.clientId,
+          clientSecret: state.azure.clientSecret,
+          geminiApiKey
+        })
+      });
+      if (res.ok) {
+        alert('Credentials saved to .env');
+      } else {
+        throw new Error('Failed to save');
+      }
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setIsSavingCreds(false);
+    }
+  };
+
+  // Apply template replacements only when baseTemplate changes (initial load / app select)
   useEffect(() => {
     if (baseTemplate) {
       let content = baseTemplate;
-      
-      // PSADT 4.1.8 Template Replacements
-      content = content.replace(/AppVendor = ''/g, `AppVendor = '${state.package.vendor || ''}'`);
-      content = content.replace(/AppName = ''/g, `AppName = '${state.package.name || ''}'`);
-      content = content.replace(/AppVersion = ''/g, `AppVersion = '${state.package.version || ''}'`);
-      
+
       // Legacy/Custom Replacements
       content = content.replace(/\[\[AppName\]\]/g, state.package.name || 'Unknown App');
       content = content.replace(/\[\[Vendor\]\]/g, state.package.vendor || 'Unknown Vendor');
       content = content.replace(/\[\[Version\]\]/g, state.package.version || '0.0.0');
       content = content.replace(/\[\[PackageId\]\]/g, state.package.packageId || 'unknown.package');
-      
-      if (content !== state.psadt.scriptContent) {
-        setState(prev => ({ ...prev, psadt: { ...prev.psadt, scriptContent: content } }));
+
+      // Apply all PSADT fields from current state
+      const p = state.psadt;
+      content = content.replace(/AppVendor = '[^']*'/, `AppVendor = '${p.appVendor}'`);
+      content = content.replace(/AppName = '[^']*'/, `AppName = '${p.appName}'`);
+      content = content.replace(/AppVersion = '[^']*'/, `AppVersion = '${p.appVersion}'`);
+      content = content.replace(/AppArch = '[^']*'/, `AppArch = '${p.appArch}'`);
+      content = content.replace(/AppLang = '[^']*'/, `AppLang = '${p.appLang}'`);
+      content = content.replace(/AppRevision = '[^']*'/, `AppRevision = '${p.appRevision}'`);
+      content = content.replace(/AppScriptVersion = '[^']*'/, `AppScriptVersion = '${p.appScriptVersion}'`);
+      content = content.replace(/AppScriptDate = '[^']*'/, `AppScriptDate = '${p.appScriptDate}'`);
+      content = content.replace(/AppScriptAuthor = '[^']*'/, `AppScriptAuthor = '${p.appScriptAuthor}'`);
+      content = content.replace(/AppProcessesToClose = @\([^)]*\)/, `AppProcessesToClose = @(${p.appProcessesToClose || "''"})`)
+      content = content.replace(/RequireAdmin = \$\w+/, `RequireAdmin = $${p.requireAdmin}`);
+
+      // Apply Show-ADT toggles
+      if (!p.showWelcome) {
+        content = content.replace(/^(\s*)Show-ADTInstallationWelcome\b/gm, '$1#Show-ADTInstallationWelcome');
+      }
+      if (!p.showProgress) {
+        content = content.replace(/^(\s*)Show-ADTInstallationProgress\b/gm, '$1#Show-ADTInstallationProgress');
       }
 
-      // Sync Intune commands
-      const installCmd = `powershell.exe -ExecutionPolicy Bypass -File "Invoke-AppDeployToolkit.ps1" -DeploymentType "Install" -DeployMode "${state.psadt.installMode}"`;
-      const uninstallCmd = `powershell.exe -ExecutionPolicy Bypass -File "Invoke-AppDeployToolkit.ps1" -DeploymentType "Uninstall" -DeployMode "${state.intune.uninstallDeployMode}"`;
-      
-      if (installCmd !== state.intune.installCommand || uninstallCmd !== state.intune.uninstallCommand) {
-        setState(prev => ({ 
-          ...prev, 
-          intune: { 
-            ...prev.intune, 
-            installCommand: installCmd,
-            uninstallCommand: uninstallCmd
-          } 
-        }));
-      }
+      setState(prev => ({ ...prev, psadt: { ...prev.psadt, scriptContent: content } }));
     }
-  }, [state.package.name, state.package.version, state.package.vendor, state.package.packageId, baseTemplate, state.psadt.installMode, state.intune.uninstallDeployMode]);
+  }, [baseTemplate]);
+
+  // Apply PSADT option fields live on user's current script content
+  useEffect(() => {
+    if (!state.psadt.scriptContent) return;
+    let content = state.psadt.scriptContent;
+    const p = state.psadt;
+
+    // Replace PSADT $adtSession fields
+    content = content.replace(/AppVendor = '[^']*'/, `AppVendor = '${p.appVendor}'`);
+    content = content.replace(/AppName = '[^']*'/, `AppName = '${p.appName}'`);
+    content = content.replace(/AppVersion = '[^']*'/, `AppVersion = '${p.appVersion}'`);
+    content = content.replace(/AppArch = '[^']*'/, `AppArch = '${p.appArch}'`);
+    content = content.replace(/AppLang = '[^']*'/, `AppLang = '${p.appLang}'`);
+    content = content.replace(/AppRevision = '[^']*'/, `AppRevision = '${p.appRevision}'`);
+    content = content.replace(/AppScriptVersion = '[^']*'/, `AppScriptVersion = '${p.appScriptVersion}'`);
+    content = content.replace(/AppScriptDate = '[^']*'/, `AppScriptDate = '${p.appScriptDate}'`);
+    content = content.replace(/AppScriptAuthor = '[^']*'/, `AppScriptAuthor = '${p.appScriptAuthor}'`);
+    content = content.replace(/AppProcessesToClose = @\([^)]*\)/, `AppProcessesToClose = @(${p.appProcessesToClose || "''"})`)
+    content = content.replace(/RequireAdmin = \$\w+/, `RequireAdmin = $${p.requireAdmin}`);
+
+    // Show-ADT toggles
+    if (!p.showWelcome) {
+      content = content.replace(/^(\s*)(?<!#)Show-ADTInstallationWelcome\b/gm, '$1#Show-ADTInstallationWelcome');
+    } else {
+      content = content.replace(/^(\s*)#Show-ADTInstallationWelcome\b/gm, '$1Show-ADTInstallationWelcome');
+    }
+    if (!p.showProgress) {
+      content = content.replace(/^(\s*)(?<!#)Show-ADTInstallationProgress\b/gm, '$1#Show-ADTInstallationProgress');
+    } else {
+      content = content.replace(/^(\s*)#Show-ADTInstallationProgress\b/gm, '$1Show-ADTInstallationProgress');
+    }
+
+    if (content !== state.psadt.scriptContent) {
+      setState(prev => ({ ...prev, psadt: { ...prev.psadt, scriptContent: content } }));
+    }
+  }, [state.psadt.appVendor, state.psadt.appName, state.psadt.appVersion, state.psadt.appArch, state.psadt.appLang, state.psadt.appRevision, state.psadt.appProcessesToClose, state.psadt.appScriptVersion, state.psadt.appScriptDate, state.psadt.appScriptAuthor, state.psadt.requireAdmin, state.psadt.showWelcome, state.psadt.showProgress]);
+
+  // Sync Intune commands when deploy modes change
+  useEffect(() => {
+    const installCmd = `powershell.exe -ExecutionPolicy Bypass -File "Invoke-AppDeployToolkit.ps1" -DeploymentType "Install" -DeployMode "${state.psadt.installMode}"`;
+    const uninstallCmd = `powershell.exe -ExecutionPolicy Bypass -File "Invoke-AppDeployToolkit.ps1" -DeploymentType "Uninstall" -DeployMode "${state.intune.uninstallDeployMode}"`;
+
+    if (installCmd !== state.intune.installCommand || uninstallCmd !== state.intune.uninstallCommand) {
+      setState(prev => ({
+        ...prev,
+        intune: {
+          ...prev.intune,
+          installCommand: installCmd,
+          uninstallCommand: uninstallCmd
+        }
+      }));
+    }
+  }, [state.psadt.installMode, state.intune.uninstallDeployMode]);
 
   const [isSavingTemplate, setIsSavingTemplate] = useState(false);
   const [isIconPickerOpen, setIsIconPickerOpen] = useState(false);
@@ -118,6 +223,40 @@ export default function App() {
   const [iconSearch, setIconSearch] = useState('');
   const [isImportingToIntune, setIsImportingToIntune] = useState(false);
   const [importResult, setImportResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [categories, setCategories] = useState<{ id: string; displayName: string }[]>([]);
+  const [isFetchingCategories, setIsFetchingCategories] = useState(false);
+
+  const fetchCategories = async () => {
+    if (!state.azure.tenantId || !state.azure.clientId || !state.azure.clientSecret) {
+      setError("Azure credentials are required to fetch categories.");
+      return;
+    }
+    setIsFetchingCategories(true);
+    try {
+      const res = await fetch('/api/intune/categories', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ azure: state.azure })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setCategories(data);
+      } else {
+        setError(data.error || "Failed to fetch categories.");
+      }
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setIsFetchingCategories(false);
+    }
+  };
+
+  // Auto-fetch categories when Azure credentials are all filled in
+  useEffect(() => {
+    if (state.azure.tenantId && state.azure.clientId && state.azure.clientSecret && categories.length === 0) {
+      fetchCategories();
+    }
+  }, [state.azure.tenantId, state.azure.clientId, state.azure.clientSecret]);
 
   const saveTemplate = async () => {
     setIsSavingTemplate(true);
@@ -279,7 +418,13 @@ export default function App() {
           maxInstallationTime: state.intune.maxInstallationTime,
           allowAvailableUninstall: state.intune.allowAvailableUninstall,
           installBehavior: state.intune.installBehavior,
-          deviceRestartBehavior: state.intune.rebootBehavior
+          deviceRestartBehavior: state.intune.rebootBehavior,
+          showWelcome: state.psadt.showWelcome,
+          showProgress: state.psadt.showProgress,
+          scriptAuthor: state.psadt.appScriptAuthor,
+          scriptContent: state.psadt.scriptContent,
+          checkArchitecture: state.intune.checkArchitecture,
+          architectures: state.intune.architectures
         })
       });
       const result = await response.json();
@@ -308,7 +453,7 @@ export default function App() {
     setIsSearching(true);
     setError(null);
     try {
-      const results = await searchWingetApp(searchQuery, searchType);
+      const results = await searchWingetApp(searchQuery);
       setSearchResults(results);
     } catch (err: any) {
       setError(err.message);
@@ -319,7 +464,7 @@ export default function App() {
   };
 
   const selectApp = (app: any) => {
-    const vendor = app.name.split(' ')[0];
+    const vendor = app.publisher || app.name.split(' ')[0];
     setState(prev => ({
       ...prev,
       package: {
@@ -331,10 +476,17 @@ export default function App() {
         vendor: vendor,
         description: prev.package.description || 'FILL THE DESCRIPTION'
       },
+      psadt: {
+        ...prev.psadt,
+        appVendor: vendor,
+        appName: app.name,
+        appVersion: app.version,
+        appScriptDate: new Date().toISOString().split('T')[0]
+      },
       intune: {
         ...prev.intune,
         publisher: vendor,
-        developer: vendor
+        developer: (!prev.intune.developer || prev.intune.developer === prev.intune.publisher) ? vendor : prev.intune.developer
       }
     }));
 
@@ -389,6 +541,44 @@ export default function App() {
     }
   };
 
+  const openInEditor = async (editor: 'vscode' | 'antigravity' | 'ise') => {
+    try {
+      const res = await fetch('/api/psadt/open-editor', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ editor, content: state.psadt.scriptContent })
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        setError(data.error || `Failed to open ${editor}`);
+      }
+    } catch (err: any) {
+      setError(`Failed to open ${editor}: ${err.message}`);
+    }
+  };
+
+  const reloadFromDisk = async () => {
+    try {
+      const params = new URLSearchParams({
+        t: String(Date.now()),
+        appId: state.package.packageId,
+        appName: state.package.name,
+        publisher: state.package.vendor,
+        version: state.package.version,
+        scriptAuthor: state.psadt.appScriptAuthor
+      });
+      const res = await fetch(`/api/psadt/reload?${params}`);
+      if (res.ok) {
+        const data = await res.json();
+        setState(prev => ({ ...prev, psadt: { ...prev.psadt, scriptContent: data.content } }));
+      } else {
+        setError("Failed to reload script from disk");
+      }
+    } catch (err: any) {
+      setError(`Failed to reload: ${err.message}`);
+    }
+  };
+
   const [isWrapping, setIsWrapping] = useState(false);
   const [wrapResult, setWrapResult] = useState<any>(null);
 
@@ -421,7 +611,7 @@ export default function App() {
     { title: 'Azure Setup', icon: ShieldCheck },
     { title: 'Search App', icon: Search },
     { title: 'PSADT Config', icon: FileCode },
-    { title: 'Intune Details', icon: Package },
+    { title: 'Package App Details', icon: Package },
     { title: 'Summary', icon: CheckCircle2 }
   ];
 
@@ -441,16 +631,17 @@ export default function App() {
         
         <nav className="flex items-center gap-1 bg-gray-100 p-1 rounded-xl">
           {steps.map((s, i) => (
-            <div 
+            <button
               key={i}
+              onClick={() => { setError(null); setState(prev => ({ ...prev, step: i })); }}
               className={cn(
-                "flex items-center gap-2 px-4 py-2 rounded-lg transition-all duration-300",
-                state.step === i ? "bg-white text-indigo-600 shadow-sm" : "text-gray-400"
+                "flex items-center gap-2 px-4 py-2 rounded-lg transition-all duration-300 cursor-pointer",
+                state.step === i ? "bg-white text-indigo-600 shadow-sm" : "text-gray-400 hover:text-gray-600"
               )}
             >
               <s.icon size={16} />
               <span className="text-sm font-semibold hidden md:block">{s.title}</span>
-            </div>
+            </button>
           ))}
         </nav>
 
@@ -461,7 +652,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto px-6 py-12">
+      <main className="max-w-[90rem] mx-auto px-6 py-12 text-sm">
         <AnimatePresence mode="wait">
           {error && (
             <motion.div 
@@ -495,8 +686,8 @@ export default function App() {
                   <div className="space-y-4">
                     <div>
                       <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5 ml-1">Tenant ID</label>
-                      <input 
-                        type="text" 
+                      <input
+                        type="text"
                         className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                         placeholder="00000000-0000-0000-0000-000000000000"
                         value={state.azure.tenantId}
@@ -505,8 +696,8 @@ export default function App() {
                     </div>
                     <div>
                       <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5 ml-1">Client ID</label>
-                      <input 
-                        type="text" 
+                      <input
+                        type="text"
                         className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                         placeholder="00000000-0000-0000-0000-000000000000"
                         value={state.azure.clientId}
@@ -515,8 +706,8 @@ export default function App() {
                     </div>
                     <div>
                       <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5 ml-1">Client Secret</label>
-                      <input 
-                        type="password" 
+                      <input
+                        type="password"
                         className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                         placeholder="••••••••••••••••"
                         value={state.azure.clientSecret}
@@ -526,22 +717,35 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="bg-indigo-600 p-8 rounded-3xl text-white shadow-xl shadow-indigo-200 flex flex-col justify-between">
-                  <div>
-                    <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center mb-6">
-                      <Sparkles size={24} />
+                <div className="space-y-6">
+                  <div className="bg-white p-8 rounded-3xl border border-gray-200 shadow-sm space-y-6">
+                    <h3 className="font-bold text-lg flex items-center gap-2">
+                      <Sparkles className="text-indigo-600" size={20} />
+                      AI API Credentials
+                    </h3>
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5 ml-1">Gemini API Key</label>
+                        <input
+                          type="password"
+                          className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                          placeholder="••••••••••••••••"
+                          value={geminiApiKey}
+                          onChange={e => handleGeminiKeyChange(e.target.value)}
+                        />
+                      </div>
+                      <p className="text-xs text-gray-400">Used for AI-powered script modifications and smart app search fallback.</p>
                     </div>
-                    <h3 className="text-2xl font-bold mb-4">AI-Powered Packaging</h3>
-                    <p className="text-indigo-100 leading-relaxed">
-                      Leverage Gemini to automate script modifications, find the best package versions, and generate Intune metadata instantly.
-                    </p>
                   </div>
-                  <div className="mt-8 p-4 bg-white/10 rounded-2xl border border-white/20">
-                    <p className="text-xs font-medium flex items-center gap-2">
-                      <Info size={14} />
-                      Data is processed securely via your provided API key.
-                    </p>
-                  </div>
+
+                  <button
+                    onClick={saveCredentials}
+                    disabled={isSavingCreds}
+                    className="w-full bg-gray-900 text-white py-4 rounded-2xl font-bold hover:bg-gray-800 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                  >
+                    <Download size={16} />
+                    {isSavingCreds ? 'Saving...' : 'Save Credentials to .env'}
+                  </button>
                 </div>
               </div>
 
@@ -586,23 +790,13 @@ export default function App() {
                     <input 
                       type="text" 
                       className="w-full bg-gray-50 border border-gray-200 rounded-2xl pl-12 pr-4 py-4 focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-lg"
-                      placeholder={searchType === 'AI' ? "Describe the app you need..." : "Search by name, ID or moniker..."}
+                      placeholder="Search by name, ID or moniker..."
                       value={searchQuery}
                       onChange={e => setSearchQuery(e.target.value)}
                       onKeyDown={e => e.key === 'Enter' && handleSearch()}
                     />
                   </div>
-                    <select 
-                      className="bg-gray-50 border border-gray-200 rounded-2xl px-6 py-4 focus:ring-2 focus:ring-indigo-500 outline-none font-semibold"
-                      value={searchType}
-                      onChange={e => setSearchType(e.target.value as any)}
-                    >
-                      <option value="Name">Name</option>
-                      <option value="Id">ID</option>
-                      <option value="Moniker">Moniker</option>
-                      {hasApiKey && <option value="AI">AI Search ✨</option>}
-                    </select>
-                  <button 
+                  <button
                     onClick={handleSearch}
                     disabled={isSearching}
                     className="bg-indigo-600 text-white px-8 py-4 rounded-2xl font-bold hover:bg-indigo-700 transition-all disabled:opacity-50"
@@ -620,6 +814,7 @@ export default function App() {
                           <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase">ID</th>
                           <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase">Version</th>
                           <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase">Moniker</th>
+                          <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase">Source</th>
                           <th className="px-6 py-4 text-right"></th>
                         </tr>
                       </thead>
@@ -647,6 +842,7 @@ export default function App() {
                             <td className="px-6 py-4 font-mono text-sm text-gray-500">{app.id}</td>
                             <td className="px-6 py-4 text-sm font-medium text-indigo-600">{app.version}</td>
                             <td className="px-6 py-4 text-sm text-gray-400">{app.moniker}</td>
+                            <td className="px-6 py-4 text-sm text-gray-400">{app.source}</td>
                             <td className="px-6 py-4 text-right min-w-[140px]">
                               <button 
                                 onClick={(e) => {
@@ -694,18 +890,24 @@ export default function App() {
                 <div className="flex items-center gap-4">
                   <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">DeployMode:</span>
                   <div className="bg-white p-1 rounded-xl border border-gray-200 flex">
-                    {(['Interactive', 'Silent', 'NonInteractive', 'Auto'] as const).map(mode => (
-                      <button
-                        key={mode}
-                        onClick={() => setState(s => ({ ...s, psadt: { ...s.psadt, installMode: mode } }))}
-                        className={cn(
-                          "px-4 py-2 rounded-lg text-xs font-bold transition-all",
-                          state.psadt.installMode === mode ? "bg-indigo-600 text-white shadow-sm" : "text-gray-400 hover:text-gray-600"
-                        )}
-                      >
-                        {mode === 'Auto' ? 'Auto (AI detection)' : mode}
-                      </button>
-                    ))}
+                    {(['Interactive', 'Silent', 'NonInteractive', 'Auto'] as const).map(mode => {
+                      const isAutoDisabled = mode === 'Auto' && !hasApiKey;
+                      return (
+                        <button
+                          key={mode}
+                          disabled={isAutoDisabled}
+                          onClick={() => setState(s => ({ ...s, psadt: { ...s.psadt, installMode: mode } }))}
+                          className={cn(
+                            "px-4 py-2 rounded-lg text-xs font-bold transition-all",
+                            state.psadt.installMode === mode ? "bg-indigo-600 text-white shadow-sm" : "text-gray-400 hover:text-gray-600",
+                            isAutoDisabled && "opacity-40 cursor-not-allowed"
+                          )}
+                          title={isAutoDisabled ? "Requires Gemini API key" : undefined}
+                        >
+                          {mode === 'Auto' ? 'Auto (AI detection)' : mode}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
               </div>
@@ -744,6 +946,36 @@ export default function App() {
                         <button className="p-1.5 text-gray-400 hover:text-white transition-colors">
                           <Download size={14} />
                         </button>
+                        <div className="w-px h-4 bg-white/10" />
+                        <button
+                          onClick={() => openInEditor('vscode')}
+                          className="p-1.5 text-gray-400 hover:text-white transition-colors text-[10px] font-bold uppercase tracking-wider flex items-center gap-1"
+                          title="Open in Visual Studio Code"
+                        >
+                          <ExternalLink size={12} /> VS Code
+                        </button>
+                        <button
+                          onClick={() => openInEditor('antigravity')}
+                          className="p-1.5 text-gray-400 hover:text-white transition-colors text-[10px] font-bold uppercase tracking-wider flex items-center gap-1"
+                          title="Open in Antigravity"
+                        >
+                          <ExternalLink size={12} /> Antigravity
+                        </button>
+                        <button
+                          onClick={() => openInEditor('ise')}
+                          className="p-1.5 text-gray-400 hover:text-white transition-colors text-[10px] font-bold uppercase tracking-wider flex items-center gap-1"
+                          title="Open in PowerShell ISE"
+                        >
+                          <ExternalLink size={12} /> ISE
+                        </button>
+                        <div className="w-px h-4 bg-white/10" />
+                        <button
+                          onClick={reloadFromDisk}
+                          className="p-1.5 text-gray-400 hover:text-white transition-colors text-[10px] font-bold uppercase tracking-wider flex items-center gap-1"
+                          title="Reload script from disk (after external editing)"
+                        >
+                          <RefreshCw size={12} /> Reload
+                        </button>
                       </div>
                     </div>
                     <textarea 
@@ -777,29 +1009,91 @@ export default function App() {
                     </button>
                   </div>
 
-                  <div className="bg-gray-900 p-6 rounded-3xl text-white space-y-4">
-                    <h3 className="font-bold text-sm uppercase tracking-widest text-indigo-400">Package Info</h3>
-                    <div className="space-y-3">
+                  <div className="bg-white p-6 rounded-3xl border border-gray-200 shadow-sm space-y-4">
+                    <h3 className="font-bold text-sm uppercase tracking-widest text-gray-600">PSADT Options</h3>
+                    <div className="grid grid-cols-2 gap-3">
                       <div>
-                        <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">App Name</label>
-                        <input 
-                          type="text" 
-                          className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500"
-                          value={state.package.name}
-                          onChange={e => setState(s => ({ ...s, package: { ...s.package, name: e.target.value } }))}
-                        />
+                        <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1 ml-1">AppVendor</label>
+                        <input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" value={state.psadt.appVendor} onChange={e => setState(s => ({ ...s, psadt: { ...s.psadt, appVendor: e.target.value } }))} />
                       </div>
                       <div>
-                        <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Version</label>
-                        <input 
-                          type="text" 
-                          className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500"
-                          value={state.package.version}
-                          onChange={e => setState(s => ({ ...s, package: { ...s.package, version: e.target.value } }))}
-                        />
+                        <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1 ml-1">AppName</label>
+                        <input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" value={state.psadt.appName} onChange={e => setState(s => ({ ...s, psadt: { ...s.psadt, appName: e.target.value } }))} />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1 ml-1">AppVersion</label>
+                        <input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" value={state.psadt.appVersion} onChange={e => setState(s => ({ ...s, psadt: { ...s.psadt, appVersion: e.target.value } }))} />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1 ml-1">AppArch</label>
+                        <input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" value={state.psadt.appArch} onChange={e => setState(s => ({ ...s, psadt: { ...s.psadt, appArch: e.target.value } }))} />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1 ml-1">AppLang</label>
+                        <input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" value={state.psadt.appLang} onChange={e => setState(s => ({ ...s, psadt: { ...s.psadt, appLang: e.target.value } }))} />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1 ml-1">AppRevision</label>
+                        <input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" value={state.psadt.appRevision} onChange={e => setState(s => ({ ...s, psadt: { ...s.psadt, appRevision: e.target.value } }))} />
+                      </div>
+                      <div className="col-span-2">
+                        <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1 ml-1">AppProcessesToClose</label>
+                        <input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none font-mono" placeholder="'process1','process2'" value={state.psadt.appProcessesToClose} onChange={e => setState(s => ({ ...s, psadt: { ...s.psadt, appProcessesToClose: e.target.value } }))} />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1 ml-1">AppScriptVersion</label>
+                        <input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" value={state.psadt.appScriptVersion} onChange={e => setState(s => ({ ...s, psadt: { ...s.psadt, appScriptVersion: e.target.value } }))} />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1 ml-1">AppScriptDate</label>
+                        <input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" value={state.psadt.appScriptDate} onChange={e => setState(s => ({ ...s, psadt: { ...s.psadt, appScriptDate: e.target.value } }))} />
+                      </div>
+                      <div className="col-span-2">
+                        <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1 ml-1">AppScriptAuthor</label>
+                        <input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="Automacanie" value={state.psadt.appScriptAuthor} onChange={e => setState(s => ({ ...s, psadt: { ...s.psadt, appScriptAuthor: e.target.value } }))} />
+                      </div>
+                      <div className="col-span-2">
+                        <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1 ml-1">RequireAdmin</label>
+                        <select className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" value={state.psadt.requireAdmin ? '$true' : '$false'} onChange={e => setState(s => ({ ...s, psadt: { ...s.psadt, requireAdmin: e.target.value === '$true' } }))}>
+                          <option value="$true">$true</option>
+                          <option value="$false">$false</option>
+                        </select>
                       </div>
                     </div>
+                    <div className="border-t border-gray-100 pt-3 space-y-3">
+                      <label className="flex items-center justify-between cursor-pointer">
+                        <span className="text-sm text-gray-700">Show-ADTInstallationWelcome</span>
+                        <button
+                          onClick={() => setState(s => ({ ...s, psadt: { ...s.psadt, showWelcome: !s.psadt.showWelcome } }))}
+                          className={cn(
+                            "w-10 h-6 rounded-full transition-colors relative",
+                            state.psadt.showWelcome ? "bg-indigo-600" : "bg-gray-300"
+                          )}
+                        >
+                          <span className={cn(
+                            "absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform",
+                            state.psadt.showWelcome ? "left-[18px]" : "left-0.5"
+                          )} />
+                        </button>
+                      </label>
+                      <label className="flex items-center justify-between cursor-pointer">
+                        <span className="text-sm text-gray-700">Show-ADTInstallationProgress</span>
+                        <button
+                          onClick={() => setState(s => ({ ...s, psadt: { ...s.psadt, showProgress: !s.psadt.showProgress } }))}
+                          className={cn(
+                            "w-10 h-6 rounded-full transition-colors relative",
+                            state.psadt.showProgress ? "bg-indigo-600" : "bg-gray-300"
+                          )}
+                        >
+                          <span className={cn(
+                            "absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform",
+                            state.psadt.showProgress ? "left-[18px]" : "left-0.5"
+                          )} />
+                        </button>
+                      </label>
+                    </div>
                   </div>
+
                 </div>
               </div>
 
@@ -830,13 +1124,31 @@ export default function App() {
               className="space-y-8"
             >
               <div className="max-w-2xl">
-                <h2 className="text-3xl font-bold mb-2">Intune Application Details</h2>
+                <h2 className="text-3xl font-bold mb-2">Package App Details</h2>
                 <p className="text-gray-500">Finalize the metadata that will appear in the Intune Company Portal.</p>
               </div>
 
               <div className="grid md:grid-cols-2 gap-8">
                 <div className="bg-white p-8 rounded-3xl border border-gray-200 shadow-sm space-y-6">
                   <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5 ml-1">App Name</label>
+                      <input
+                        type="text"
+                        className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none"
+                        value={state.package.name}
+                        onChange={e => setState(s => ({ ...s, package: { ...s.package, name: e.target.value } }))}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5 ml-1">Version</label>
+                      <input
+                        type="text"
+                        className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none"
+                        value={state.package.version}
+                        onChange={e => setState(s => ({ ...s, package: { ...s.package, version: e.target.value } }))}
+                      />
+                    </div>
                     <div className="col-span-2">
                       <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5 ml-1">Publisher</label>
                       <input 
@@ -892,13 +1204,25 @@ export default function App() {
                     </div>
                     <div>
                       <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5 ml-1">Category</label>
-                      <input 
-                        type="text" 
-                        className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none"
-                        placeholder="e.g. Productivity, Utilities..."
-                        value={state.intune.category}
-                        onChange={e => setState(s => ({ ...s, intune: { ...s.intune, category: e.target.value } }))}
-                      />
+                      <div className="flex gap-2">
+                        <select
+                          className="flex-1 bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none"
+                          value={state.intune.category}
+                          onChange={e => setState(s => ({ ...s, intune: { ...s.intune, category: e.target.value } }))}
+                        >
+                          <option value="">Select category...</option>
+                          {categories.map(cat => (
+                            <option key={cat.id} value={cat.displayName}>{cat.displayName}</option>
+                          ))}
+                        </select>
+                        <button
+                          onClick={fetchCategories}
+                          disabled={isFetchingCategories}
+                          className="px-4 py-3 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 transition-all disabled:opacity-50 whitespace-nowrap"
+                        >
+                          {isFetchingCategories ? 'Loading...' : 'Refresh'}
+                        </button>
+                      </div>
                     </div>
                     <div>
                       <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5 ml-1">Behavior</label>
@@ -920,7 +1244,7 @@ export default function App() {
                       >
                         <option value="DetermineByReturnCode">Determine By Return Code</option>
                         <option value="ForceReboot">Force Reboot</option>
-                        <option value="SuppressReboot">Suppress Reboot</option>
+                        <option value="SuppressReboot">No specific action</option>
                         <option value="AppInstallMayForceReboot">App Install May Force Reboot</option>
                       </select>
                     </div>
@@ -970,9 +1294,41 @@ export default function App() {
                         onChange={e => setState(s => ({ ...s, intune: { ...s.intune, maxInstallationTime: parseInt(e.target.value) } }))}
                       />
                     </div>
+                    <div>
+                      <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5 ml-1">Check Architecture</label>
+                      <div className="flex items-center gap-4 mt-2">
+                        <button
+                          className={`px-4 py-2 rounded-lg text-xs font-bold transition-all ${state.intune.checkArchitecture ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                          onClick={() => setState(s => ({ ...s, intune: { ...s.intune, checkArchitecture: true, architectures: s.intune.architectures.length ? s.intune.architectures : ['x64'] } }))}
+                        >Yes</button>
+                        <button
+                          className={`px-4 py-2 rounded-lg text-xs font-bold transition-all ${!state.intune.checkArchitecture ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                          onClick={() => setState(s => ({ ...s, intune: { ...s.intune, checkArchitecture: false } }))}
+                        >No</button>
+                      </div>
+                      {state.intune.checkArchitecture && (
+                        <div className="flex gap-2 mt-2">
+                          {(['x86', 'x64', 'ARM64'] as const).map(arch => (
+                            <button
+                              key={arch}
+                              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${state.intune.architectures.includes(arch) ? 'bg-indigo-500 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}
+                              onClick={() => setState(s => ({
+                                ...s,
+                                intune: {
+                                  ...s.intune,
+                                  architectures: s.intune.architectures.includes(arch)
+                                    ? s.intune.architectures.filter(a => a !== arch)
+                                    : [...s.intune.architectures, arch]
+                                }
+                              }))}
+                            >{arch}</button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                     <div className="col-span-2">
                       <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5 ml-1">Description</label>
-                      <textarea 
+                      <textarea
                         className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none min-h-[80px]"
                         value={state.package.description}
                         onChange={e => setState(s => ({ ...s, package: { ...s.package, description: e.target.value } }))}
@@ -1043,6 +1399,12 @@ export default function App() {
                           >
                             <Search size={14} />
                             Choose icon manually
+                          </button>
+                          <button
+                            onClick={() => setState(s => ({ ...s, intune: { ...s.intune, iconUrl: '' } }))}
+                            className="text-gray-500 font-bold text-sm hover:underline flex items-center gap-1 border-l pl-3 border-gray-200"
+                          >
+                            No icon
                           </button>
                         </div>
                       </div>
@@ -1356,7 +1718,7 @@ export default function App() {
       </main>
 
       {/* Footer */}
-      <footer className="max-w-6xl mx-auto px-6 py-8 border-t border-gray-200 flex flex-col md:flex-row items-center justify-between gap-4 text-gray-400 text-sm">
+      <footer className="max-w-[90rem] mx-auto px-6 py-8 border-t border-gray-200 flex flex-col md:flex-row items-center justify-between gap-4 text-gray-400 text-sm">
         <div className="flex items-center gap-2">
           <ShieldCheck size={16} />
           <span>Enterprise Grade Security</span>
