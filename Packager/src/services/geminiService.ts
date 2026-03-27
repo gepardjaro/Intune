@@ -77,3 +77,40 @@ export const modifyPsadtScript = async (script: string, request: string) => {
   });
   return response.text;
 };
+
+export const chatWithPsadtAssistant = async (
+  script: string,
+  history: { role: string; content: string }[],
+  request: string
+): Promise<{ text: string; isScript: boolean }> => {
+  if (!ai) {
+    return { text: "Gemini API Key is missing. Add it in Azure Setup to enable AI assistance.", isScript: false };
+  }
+
+  const historyContext = history.map(m =>
+    `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`
+  ).join('\n\n');
+
+  const prompt = `You are a professional PSADT (PowerShell App Deployment Toolkit) expert assistant.
+
+Current script:
+${script}
+
+${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}User: ${request}
+
+Rules:
+- If the user asks you to modify the script, return ONLY the complete modified script code with no explanation.
+- If the user asks a question or wants an explanation, respond with a helpful text answer.
+- Never wrap code in markdown code blocks.`;
+
+  const response = await ai.models.generateContent({
+    model: "gemini-3-flash-preview",
+    contents: prompt,
+  });
+
+  const text = response.text;
+  const isScript = text.includes('$adtSession') || text.includes('Invoke-AppDeployToolkit') ||
+    (text.includes('$scriptPayload') && text.includes('Install-WinGetPackage'));
+
+  return { text, isScript };
+};

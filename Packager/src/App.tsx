@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Settings, 
   Search, 
@@ -17,13 +17,15 @@ import {
   Info,
   RefreshCw,
   AlertCircle,
-  Loader2
+  Loader2,
+  Send,
+  Play
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { INITIAL_STATE, type AppState, type PackageDetails } from './types';
-import { searchWingetApp, modifyPsadtScript, setGeminiApiKey } from './services/geminiService';
+import { searchWingetApp, modifyPsadtScript, setGeminiApiKey, chatWithPsadtAssistant } from './services/geminiService';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -38,6 +40,8 @@ export default function App() {
   const [aiRequest, setAiRequest] = useState('');
   const [isModifying, setIsModifying] = useState(false);
   const [history, setHistory] = useState<string[]>([]);
+  const [aiMessages, setAiMessages] = useState<{ role: 'user' | 'ai'; content: string; isScript?: boolean }[]>([]);
+  const chatEndRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [serverPlatform, setServerPlatform] = useState<string | null>(null);
   const [hasApiKey, setHasApiKey] = useState(false);
@@ -541,6 +545,33 @@ export default function App() {
     }
   };
 
+  const handleAiChat = async () => {
+    if (!aiRequest.trim()) return;
+    const msg = aiRequest;
+    setIsModifying(true);
+    setError(null);
+    setAiMessages(prev => [...prev, { role: 'user', content: msg }]);
+    setAiRequest('');
+    try {
+      const result = await chatWithPsadtAssistant(state.psadt.scriptContent, aiMessages, msg);
+      setAiMessages(prev => [...prev, { role: 'ai', content: result.text, isScript: result.isScript }]);
+    } catch (err: any) {
+      setAiMessages(prev => [...prev, { role: 'ai', content: `Error: ${err.message}` }]);
+    } finally {
+      setIsModifying(false);
+    }
+  };
+
+  const applyAiScript = (script: string) => {
+    setHistory(prev => [...prev, state.psadt.scriptContent]);
+    setState(prev => ({ ...prev, psadt: { ...prev.psadt, scriptContent: script } }));
+  };
+
+  // Auto-scroll chat to bottom
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [aiMessages]);
+
   const openInEditor = async (editor: 'vscode' | 'antigravity' | 'ise') => {
     try {
       const res = await fetch('/api/psadt/open-editor', {
@@ -988,25 +1019,75 @@ export default function App() {
                 </div>
 
                 <div className="space-y-6">
-                  <div className="bg-white p-6 rounded-3xl border border-gray-200 shadow-sm space-y-4">
-                    <h3 className="font-bold flex items-center gap-2">
-                      <Sparkles className="text-indigo-600" size={18} />
-                      AI Script Assistant
-                    </h3>
-                    <p className="text-sm text-gray-500">Ask Gemini to add logic, fix errors, or customize the deployment flow.</p>
-                    <textarea 
-                      className="w-full bg-gray-50 border border-gray-200 rounded-2xl p-4 text-sm outline-none focus:ring-2 focus:ring-indigo-500 min-h-[120px]"
-                      placeholder="Example: Add a check to close Outlook before installation..."
-                      value={aiRequest}
-                      onChange={e => setAiRequest(e.target.value)}
-                    />
-                    <button 
-                      onClick={handleAiModify}
-                      disabled={!aiRequest || isModifying}
-                      className="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
-                    >
-                      {isModifying ? 'Modifying...' : 'Apply AI Changes'}
-                    </button>
+                  <div className="bg-[#1E1E1E] rounded-3xl overflow-hidden shadow-2xl border border-white/5 flex flex-col" style={{ height: '500px' }}>
+                    <div className="bg-[#2D2D2D] px-5 py-3 flex items-center gap-2 border-b border-white/5 shrink-0">
+                      <Sparkles className="text-indigo-400" size={16} />
+                      <span className="text-sm font-bold text-gray-300">AI Script Assistant</span>
+                      {aiMessages.length > 0 && (
+                        <button
+                          onClick={() => setAiMessages([])}
+                          className="ml-auto text-[10px] text-gray-500 hover:text-gray-300 uppercase tracking-wider font-bold"
+                        >Clear</button>
+                      )}
+                    </div>
+                    <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                      {aiMessages.length === 0 && (
+                        <div className="flex items-center justify-center h-full">
+                          <p className="text-gray-600 text-sm text-center">Ask Gemini to modify your script, explain logic, or fix errors.</p>
+                        </div>
+                      )}
+                      {aiMessages.map((msg, i) => (
+                        <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                          <div className={cn(
+                            "max-w-[85%] rounded-2xl px-4 py-2.5 text-sm",
+                            msg.role === 'user'
+                              ? "bg-indigo-600 text-white"
+                              : "bg-white/10 text-gray-200"
+                          )}>
+                            {msg.isScript ? (
+                              <div className="space-y-2">
+                                <pre className="text-xs font-mono whitespace-pre-wrap max-h-[150px] overflow-y-auto opacity-70">{msg.content.slice(0, 500)}{msg.content.length > 500 ? '\n...' : ''}</pre>
+                                <button
+                                  onClick={() => applyAiScript(msg.content)}
+                                  className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-3 py-1.5 rounded-lg transition-all"
+                                >
+                                  <Play size={12} /> Apply to Script
+                                </button>
+                              </div>
+                            ) : (
+                              <p className="whitespace-pre-wrap">{msg.content}</p>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                      {isModifying && (
+                        <div className="flex justify-start">
+                          <div className="bg-white/10 rounded-2xl px-4 py-2.5">
+                            <Loader2 size={16} className="animate-spin text-indigo-400" />
+                          </div>
+                        </div>
+                      )}
+                      <div ref={chatEndRef} />
+                    </div>
+                    <div className="border-t border-white/5 p-3 shrink-0">
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-white outline-none focus:border-indigo-500 placeholder-gray-500"
+                          placeholder="Ask AI to modify, explain, or fix..."
+                          value={aiRequest}
+                          onChange={e => setAiRequest(e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleAiChat(); } }}
+                        />
+                        <button
+                          onClick={handleAiChat}
+                          disabled={!aiRequest.trim() || isModifying}
+                          className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white p-2.5 rounded-xl transition-all"
+                        >
+                          <Send size={16} />
+                        </button>
+                      </div>
+                    </div>
                   </div>
 
                   <div className="bg-white p-6 rounded-3xl border border-gray-200 shadow-sm space-y-4">
