@@ -220,46 +220,43 @@ async function importToIntune(params: {
       # Add a detection rule. Use a script if provided, otherwise default to explorer.exe existence.
       Write-Host "Adding detection rule..."
       $DetectionScript = @'
-# ---------------------------------------------------------
-# DEFINE THE ACTUAL PAYLOAD (Independent of PS Version)
-# ---------------------------------------------------------
-$scriptPayload = {
-    $AppId = '${escapePS(appId)}'
-    $moduleName = "Microsoft.WinGet.Client"
-    Import-Module $moduleName -ErrorAction Stop
+#Define app name
+$WingetAppID = "${escapePS(appId)}"
 
-    $checkApp = Get-WinGetPackage -Id $AppId -ErrorAction SilentlyContinue
+#Help SYSTEM find winget.exe folder
+$wingetPath = Get-Item -Path "$env:ProgramW6432\\WindowsApps\\Microsoft.DesktopAppInstaller_*_x64__8wekyb3d8bbwe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 
-    if ($checkApp) {
-        $availableUpdate = @($checkApp | Where-Object { $_.IsUpdateAvailable })
-        if ($availableUpdate.Count -eq 0) {
-            Write-Output "Detected"
+Set-Location -Path $wingetPath.FullName
+
+Write-Output "Starting deployment checks for $WingetAppID"
+
+try {
+    #Check if the application is installed
+    $AppInstalled = .\\winget.exe list -e --id $WingetAppID --accept-source-agreements
+
+    if ($AppInstalled -match $WingetAppID) {
+        Write-Output "$WingetAppID is installed. Proceeding to check for updates."
+
+        #Check if there is an upgrade
+        $LocalInstall = .\\winget.exe list --id $WingetAppID -e --accept-source-agreements --upgrade-available
+
+        if ($LocalInstall[-1].Trim() -eq "1 upgrades available.") {
+            Write-Output "An upgrade is available for $WingetAppID."
+            exit 1
+        }
+        else {
+            Write-Output "$WingetAppID is installed and fully up-to-date. No action needed."
             exit 0
         }
     }
-
-    exit 1
-}
-# ---------------------------------------------------------
-# PS7 CHECK AND EXECUTION ROUTING
-# ---------------------------------------------------------
-if ($PSVersionTable.PSVersion.Major -lt 7) {
-
-    $pwshPath = "C:\\Program Files\\PowerShell\\7\\pwsh.exe"
-
-    if (Test-Path $pwshPath) {
-        $output = & $pwshPath -NoProfile -ExecutionPolicy Bypass -Command $scriptPayload
-
-        if ($LASTEXITCODE -eq 0) {
-            Write-Output "Detected"
-            exit 0
-        }
+    else {
+        Write-Output "$WingetAppID is not currently installed."
+        exit 1
     }
-
-    exit 1
 }
-else {
-    & $scriptPayload
+catch {
+    Write-Output "An error occurred during Winget execution: $_"
+    exit 1
 }
 '@
       $DetectionScriptPath = Join-Path $env:TEMP "DetectionScript_$([Guid]::NewGuid()).ps1"
@@ -718,128 +715,194 @@ async function startServer() {
     result = result.replace(/AppScriptDate = '[^']*'/, "AppScriptDate = '__APPSCRIPTDATE__'");
     result = result.replace(/AppScriptAuthor = '[^']*'/, "AppScriptAuthor = '__APPSCRIPTAUTHOR__'");
 
-    // Inject Pre-Installation tasks (NuGet, PS7, WinGet module) — only if not already injected
-    if (result.includes("    ## <Perform Pre-Installation tasks here>") && !result.includes("Install-PackageProvider -Name NuGet")) {
+    // Inject Pre-Installation tasks (Winget bootstrap) — only if not already injected
+    if (result.includes("    ## <Perform Pre-Installation tasks here>") && !result.includes("Checking if Winget is installed")) {
       const preInstallTasks = `    ## <Perform Pre-Installation tasks here>
-    if (-not (Get-PackageProvider -Name NuGet -ListAvailable -ErrorAction Ignore)) {
-        Write-Host "Installing NuGet provider..."
-        Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope AllUsers | Out-Null
-    }
+    $installerPath = $null
 
-    $pwshPath = "$env:ProgramW6432\\PowerShell\\7\\pwsh.exe"
-    # 1. Check if PowerShell 7 is installed machine-wide
-    if (-not (Test-Path $pwshPath)) {
-        Write-Host "PowerShell 7 not found. Installing silently for SYSTEM (Machine-wide)..."
-        $JBNWingetAppID = "Microsoft.Powershell"
-        #Help SYSTEM find winget.exe folder
-        Set-Location -Path ("$env:ProgramW6432\\WindowsApps\\Microsoft.DesktopAppInstaller_*_x64__8wekyb3d8bbwe")
-        #Update software with winget.exe
-        .\\winget.exe install --id $JBNWingetAppID --silent --accept-package-agreements --accept-source-agreements
-        $code = $LASTEXITCODE
-        Write-Output "winget exit code: $code"
-        # 0 = success, -1978335189 = already installed (0x8A150019)
-        if ($code -ne 0 -and $code -ne -1978335189) {
-            if (-not (Test-Path $pwshPath)) {
-                Write-Error "PowerShell 7 installation failed with exit code $code."
-                exit $code
+    try {
+        Write-ADTLogEntry -Message "Checking if Winget is installed..." -Source "WingetDeployment"
+
+        $wingetExePath = $null
+
+        # 1st attempt: Appx logic (Most reliable for SYSTEM and Admins alike)
+        $appx = Get-AppxPackage -Name "Microsoft.DesktopAppInstaller" -AllUsers -ErrorAction SilentlyContinue | Sort-Object Version -Descending | Select-Object -First 1
+
+        if ($appx -and $appx.InstallLocation) {
+            $wingetExePath = Join-Path -Path $appx.InstallLocation -ChildPath "winget.exe"
+        }
+        else {
+            # 2nd attempt: File system wildcard fallback
+            $wingetPath = Get-Item -Path "$env:ProgramW6432\\WindowsApps\\Microsoft.DesktopAppInstaller_*_x64__8wekyb3d8bbwe" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+            if ($wingetPath) {
+                $wingetExePath = Join-Path -Path $wingetPath.FullName -ChildPath "winget.exe"
             }
-            Write-Host "winget returned $code but PS7 exists at $pwshPath, continuing..."
         }
-        if (-not (Test-Path $pwshPath)) {
-            Write-Error "PowerShell 7 installation failed. pwsh.exe not found."
-            exit 1
+
+        # Verify if Winget is fully functional. On vanilla, the exe exists but lacks VCLibs, so it fails execution.
+        $wingetFunctional = $false
+        if ($wingetExePath -and (Test-Path -Path $wingetExePath)) {
+            try {
+                $process = Start-Process -FilePath $wingetExePath -ArgumentList "--version" -Wait -NoNewWindow -PassThru -ErrorAction Stop
+                if ($process.ExitCode -eq 0) {
+                    $wingetFunctional = $true
+                } else {
+                    Write-ADTLogEntry -Message "Winget executable exists but failed functional test with exit code $($process.ExitCode)." -Source "WingetDeployment"
+                }
+            }
+            catch {
+                Write-ADTLogEntry -Message "Winget executable exists but failed to launch. It may be missing dependencies. Error: $_" -Source "WingetDeployment"
+            }
         }
-        Write-Host "PowerShell 7 installed successfully!"
-    }
-    $moduleName = "Microsoft.WinGet.Client"
 
-    if (-not (Get-Module -ListAvailable -Name $moduleName)) {
-        Write-Host "'$moduleName' not found. Installing..."
-        # Install the WinGet module securely and silently for All Users
-        Install-Module -Name $moduleName -Force -Scope AllUsers -AllowClobber
-        Write-Host "WinGet module installed successfully!"
-    }
+        if ($wingetFunctional) {
+            Write-ADTLogEntry -Message "Winget is already installed and functional at: $wingetExePath. Skipping silent installation." -Source "WingetDeployment"
+        }
+        else {
+            Write-ADTLogEntry -Message "Winget not found or not functional. Proceeding with silent installation from GitHub releases (including dependencies)." -Source "WingetDeployment"
 
-    Import-Module $moduleName -ErrorAction Stop`;
+            # 1. Get the latest download URL from GitHub API
+            $apiUrl = "https://api.github.com/repos/microsoft/winget-cli/releases/latest"
+
+            # Ensure TLS 1.2 is used for the web request
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+            $releaseData = Invoke-RestMethod -Uri $apiUrl -UseBasicParsing -ErrorAction Stop
+            $msixAsset = $releaseData.assets | Where-Object { $_.name -match "\\.msixbundle$" } | Select-Object -First 1
+
+            if (-not $msixAsset) {
+                Write-ADTLogEntry -Message "Could not find the .msixbundle asset in the latest Winget release." -Severity 3 -Source "WingetDeployment"
+            }
+            else {
+                $downloadUrl = $msixAsset.browser_download_url
+                $installerPath = "$env:TEMP\\winget.msixbundle"
+
+                # 2. Download the installer
+                Write-ADTLogEntry -Message "Downloading WinGet from $downloadUrl to $installerPath..." -Source "WingetDeployment"
+                Invoke-WebRequest -Uri $downloadUrl -OutFile $installerPath -UseBasicParsing -ErrorAction Stop
+
+                # 2.5 Download and install dependencies (Prevents STATUS_DLL_NOT_FOUND on vanilla OS)
+                $depAsset = $releaseData.assets | Where-Object { $_.name -match "DesktopAppInstaller_Dependencies\\.zip$" } | Select-Object -First 1
+                if ($depAsset) {
+                    $depZipPath = "$env:TEMP\\winget-deps.zip"
+                    $depExtractPath = "$env:TEMP\\winget-deps"
+                    Write-ADTLogEntry -Message "Downloading dependencies from $($depAsset.browser_download_url)..." -Source "WingetDeployment"
+                    Invoke-WebRequest -Uri $depAsset.browser_download_url -OutFile $depZipPath -UseBasicParsing -ErrorAction Stop
+
+                    Write-ADTLogEntry -Message "Extracting dependencies to $depExtractPath..." -Source "WingetDeployment"
+                    if (Test-Path $depExtractPath) { Remove-Item $depExtractPath -Recurse -Force -ErrorAction SilentlyContinue }
+                    Expand-Archive -Path $depZipPath -DestinationPath $depExtractPath -Force
+
+                    # Collect x64 dependencies
+                    $depPaths = @(Get-ChildItem -Path "$depExtractPath\\x64" -Filter "*.appx" | Select-Object -ExpandProperty FullName)
+                }
+
+                # 3. Install the main package (SYSTEM account requires Provisioning rather than Add-AppxPackage)
+                Write-ADTLogEntry -Message "Installing WinGet silently (Provisioning for System)..." -Source "WingetDeployment"
+                if ($depPaths -and $depPaths.Count -gt 0) {
+                    Add-AppxProvisionedPackage -Online -PackagePath $installerPath -DependencyPackagePath $depPaths -SkipLicense -ErrorAction Stop
+                } else {
+                    Add-AppxProvisionedPackage -Online -PackagePath $installerPath -SkipLicense -ErrorAction Stop
+                }
+
+                # 4. Verify installation
+                $wingetPathAfter = Get-Item -Path "$env:ProgramW6432\\WindowsApps\\Microsoft.DesktopAppInstaller_*_x64__8wekyb3d8bbwe" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+
+                $wingetExePathAfter = $null
+                if ($wingetPathAfter) {
+                    $wingetExePathAfter = Join-Path -Path $wingetPathAfter.FullName -ChildPath "winget.exe"
+                }
+
+                if ($wingetExePathAfter -and (Test-Path -Path $wingetExePathAfter)) {
+                    Write-ADTLogEntry -Message "WinGet successfully installed at: $wingetExePathAfter" -Source "WingetDeployment"
+                } else {
+                    Write-ADTLogEntry -Message "WinGet installation command completed, but winget.exe cannot be found in the expected location." -Severity 3 -Source "WingetDeployment"
+                }
+            }
+        }
+    }
+    catch {
+        Write-ADTLogEntry -Message "Failed to check or install Winget. Error: $_" -Severity 3 -Source "WingetDeployment"
+    }
+    finally {
+        # 5. Cleanup
+        if ($installerPath -and (Test-Path -Path $installerPath)) {
+            Remove-Item -Path $installerPath -Force -ErrorAction SilentlyContinue
+        }
+        $depZipPath = "$env:TEMP\\winget-deps.zip"
+        $depExtractPath = "$env:TEMP\\winget-deps"
+        if (Test-Path -Path $depZipPath) { Remove-Item -Path $depZipPath -Force -ErrorAction SilentlyContinue }
+        if (Test-Path -Path $depExtractPath) { Remove-Item -Path $depExtractPath -Recurse -Force -ErrorAction SilentlyContinue }
+    }`;
       result = result.replace("    ## <Perform Pre-Installation tasks here>", preInstallTasks);
     }
 
     // Inject Installation tasks — only if not already injected
-    if (result.includes("    ## <Perform Installation tasks here>") && !result.includes("Install-WinGetPackage")) {
+    if (result.includes("    ## <Perform Installation tasks here>") && !result.includes("Initiating deployment via Winget.")) {
       const installTasks = `    ## <Perform Installation tasks here>
-    # ---------------------------------------------------------
-    # DEFINE THE ACTUAL PAYLOAD (Independent of PS Version)
-    # ---------------------------------------------------------
-    $scriptPayload = {
-        $moduleName = "Microsoft.WinGet.Client"
-        Import-Module $moduleName -ErrorAction Stop
-        $AppId = '__APPID__'
-        try {
-            Install-WinGetPackage -Id $AppId -Mode Silent -Force -Confirm -ErrorAction SilentlyContinue
-            Write-Host "Successfully installed $AppId." -ForegroundColor Green
-        }
-        catch {
-            Write-Host "Failed to install $AppId. Error: $($_.Exception.Message)" -ForegroundColor Yellow
-        }
+    #Define app name
+    $WingetAppID = "__APPID__"
+    $acceptSilent = "--accept-source-agreements --accept-package-agreements --silent"
+
+    #Help SYSTEM find winget.exe folder
+    $wingetPath = Get-Item -Path "$env:ProgramW6432\\WindowsApps\\Microsoft.DesktopAppInstaller_*_x64__8wekyb3d8bbwe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+
+    # [FIX] When executing winget directly under SYSTEM context without App Execution Alias, it fails to dynamically map its required frameworks. We must manually inject UWP dependency paths into the process variables to prevent -1073741515 (STATUS_DLL_NOT_FOUND) errors!
+    $envPathsToAdd = @($wingetPath.FullName)
+    $uwpDeps = Get-Item -Path "$env:ProgramW6432\\WindowsApps\\Microsoft.VCLibs*x64*", "$env:ProgramW6432\\WindowsApps\\Microsoft.WindowsAppRuntime*x64*", "$env:ProgramW6432\\WindowsApps\\Microsoft.UI.Xaml*x64*" -ErrorAction SilentlyContinue
+    if ($uwpDeps) { $envPathsToAdd += @($uwpDeps.FullName) }
+    $envPathsToAdd += $env:PATH
+    $env:PATH = $envPathsToAdd -join ";"
+
+    Set-Location -Path $wingetPath.FullName
+
+    Write-ADTLogEntry -Message "Starting deployment checks for $WingetAppID" -Source "WingetDeployment"
+
+    try {
+        Write-ADTLogEntry -Message "Initiating deployment via Winget." -Source "WingetDeployment"
+
+        Start-ADTProcess -FilePath '.\\winget.exe' -ArgumentList "install -e --id $WingetAppID $acceptSilent"
+
+        Write-ADTLogEntry -Message "Deployment process completed successfully." -Source "WingetDeployment"
     }
-    # ---------------------------------------------------------
-    # PS7 CHECK AND EXECUTION ROUTING
-    # ---------------------------------------------------------
-    if ($PSVersionTable.PSVersion.Major -lt 7) {
-        $pwshPath = "$env:ProgramW6432\\PowerShell\\7\\pwsh.exe"
-        Write-Host "Running in PS5.1. Launching commands in PowerShell 7..."
-        & $pwshPath -NoProfile -ExecutionPolicy Bypass -Command $scriptPayload
-        if ( $LASTEXITCODE -eq 1 ) {
-            Write-Output "Installation failed"
-            exit 1
-        }
-        else {
-            Write-Output "Installation successful"
-        }
-    }
-    else {
-        Write-Host "Already running in PowerShell 7. Executing payload..."
-        & $scriptPayload
+    catch {
+        Write-ADTLogEntry -Message "An error occurred during Winget execution: $_" -Severity 3 -Source "WingetDeployment"
+        exit 1
     }`;
       result = result.replace("    ## <Perform Installation tasks here>", installTasks);
     }
 
     // Inject Uninstallation tasks — only if not already injected
-    if (result.includes("    ## <Perform Uninstallation tasks here>") && !result.includes("Uninstall-WinGetPackage")) {
+    if (result.includes("    ## <Perform Uninstallation tasks here>") && !result.includes("Starting uninstallation for")) {
       const uninstallTasks = `    ## <Perform Uninstallation tasks here>
-    # ---------------------------------------------------------
-    # DEFINE THE ACTUAL PAYLOAD (Independent of PS Version)
-    # ---------------------------------------------------------
-    $scriptPayload = {
-        $moduleName = "Microsoft.WinGet.Client"
-        Import-Module $moduleName -ErrorAction Stop
-        $AppId = '__APPID__'
-        try {
-            Uninstall-WinGetPackage -Id $AppId -Force -Confirm -Mode Silent -ErrorAction Stop
-            Write-Host "Successfully uninstalled $AppId." -ForegroundColor Green
-        }
-        catch {
-            Write-Host "Failed to uninstall $AppId. Error: $($_.Exception.Message)" -ForegroundColor Yellow
-        }
-    }
-    # ---------------------------------------------------------
-    # PS7 CHECK AND EXECUTION ROUTING
-    # ---------------------------------------------------------
-    if ($PSVersionTable.PSVersion.Major -lt 7) {
-        $pwshPath = "$env:ProgramW6432\\PowerShell\\7\\pwsh.exe"
-        Write-Host "Running in PS5.1. Launching commands in PowerShell 7..."
-        & $pwshPath -NoProfile -ExecutionPolicy Bypass -Command $scriptPayload
-        if ( $LASTEXITCODE -eq 1 ) {
-            Write-Output "Uninstallation failed"
-            exit 1
+    #Define app name
+    $WingetAppID = "__APPID__"
+    $acceptSilent = "--accept-source-agreements --silent"
+
+    #Help SYSTEM find winget.exe folder
+    $wingetPath = Get-Item -Path "$env:ProgramW6432\\WindowsApps\\Microsoft.DesktopAppInstaller_*_x64__8wekyb3d8bbwe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    Set-Location -Path $wingetPath.FullName
+
+    Write-ADTLogEntry -Message "Starting uninstallation for $WingetAppID" -Source "WingetDeployment"
+
+    try {
+        #Check if the application is installed first to prevent false failure
+        $AppInstalled = .\\winget.exe list -e --id $WingetAppID --accept-source-agreements
+
+        if ($AppInstalled -match $WingetAppID) {
+            Write-ADTLogEntry -Message "$WingetAppID is installed. Initiating uninstallation via Winget." -Source "WingetDeployment"
+
+            Start-ADTProcess -FilePath '.\\winget.exe' -ArgumentList "uninstall -e --id $WingetAppID $acceptSilent"
+
+            Write-ADTLogEntry -Message "Uninstallation process completed successfully." -Source "WingetDeployment"
         }
         else {
-            Write-Output "Uninstallation successful"
+            Write-ADTLogEntry -Message "$WingetAppID is not currently installed. No action needed." -Source "WingetDeployment"
         }
     }
-    else {
-        Write-Host "Already running in PowerShell 7. Executing payload..."
-        & $scriptPayload
+    catch {
+        Write-ADTLogEntry -Message "An error occurred during Winget execution: $_" -Severity 3 -Source "WingetDeployment"
+        exit 1
     }`;
       result = result.replace("    ## <Perform Uninstallation tasks here>", uninstallTasks);
     }
